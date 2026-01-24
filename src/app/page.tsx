@@ -1,65 +1,117 @@
-import Image from "next/image";
+﻿import Link from "next/link";
+import { Card } from "@/components/ui/Card";
+
+const categories = [
+  "Beer",
+  "Wine",
+  "Whiskey",
+  "Vodka",
+  "Tequila",
+  "Rum",
+  "Gin",
+  "Extras",
+];
+
+const highlights = [
+  { title: "Top Deals", href: "/shop?sort=deals" },
+  { title: "Top Shelf Items", href: "/shop?sort=top-shelf" },
+  { title: "Popular Items", href: "/shop?sort=popular" },
+];
 
 export default function Home() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="space-y-12">
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-amber-600 via-rose-500 to-red-500 p-8 text-white sm:p-12">
+        <div className="relative z-10 max-w-2xl space-y-4">
+          <p className="text-sm uppercase tracking-[0.2em] text-white/80">
+            Newark, NJ • Same-day delivery
           </p>
+          <h1 className="text-3xl font-semibold leading-tight sm:text-4xl">
+            Your neighborhood bottle shop, delivered fast.
+          </h1>
+          <p className="text-base text-white/90 sm:text-lg">
+            Curated wine, spirits, and essentials with pickup or delivery in
+            under hours.
+          </p>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Link
+              href="/shop"
+              className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-zinc-900"
+            >
+              Shop now
+            </Link>
+            <Link
+              href="/shop?sort=top-shelf"
+              className="inline-flex items-center justify-center rounded-full border border-white/40 px-6 py-3 text-sm font-semibold text-white hover:bg-white/10"
+            >
+              View top shelf
+            </Link>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <div className="pointer-events-none absolute right-6 top-6 h-28 w-28 rounded-full bg-white/20 blur-2xl" />
+        <div className="pointer-events-none absolute bottom-0 right-0 h-40 w-40 rounded-full bg-white/10 blur-3xl" />
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-3">
+        {[
+          "Same-day delivery",
+          "Secure checkout",
+          "Pickup available",
+        ].map((item) => (
+          <Card key={item} className="flex items-center justify-center text-sm">
+            {item}
+          </Card>
+        ))}
+      </section>
+
+      <section className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold text-zinc-900">
+            Shop by Category
+          </h2>
+          <Link href="/shop" className="text-sm text-zinc-600 hover:text-zinc-900">
+            View all
+          </Link>
         </div>
-      </main>
+        <div className="grid gap-4 sm:grid-cols-4">
+          {categories.map((category) => (
+            <div key={category} className="flex flex-col items-center gap-3">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full bg-white text-sm font-semibold text-zinc-900 shadow-sm">
+                {category}
+              </div>
+              <span className="text-sm text-zinc-600">{category}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {highlights.map((section) => (
+        <section key={section.title} className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold text-zinc-900">
+              {section.title}
+            </h2>
+            <Link
+              href={section.href}
+              className="text-sm text-zinc-600 hover:text-zinc-900"
+            >
+              View all
+            </Link>
+          </div>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <Card key={index} className="space-y-3">
+                <div className="h-36 rounded-xl bg-zinc-100" />
+                <div className="space-y-2">
+                  <div className="h-4 w-2/3 rounded bg-zinc-100" />
+                  <div className="h-4 w-1/2 rounded bg-zinc-100" />
+                </div>
+              </Card>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
+
