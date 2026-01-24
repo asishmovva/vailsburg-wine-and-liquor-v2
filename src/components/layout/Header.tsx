@@ -1,18 +1,17 @@
 ﻿"use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import type { RefObject } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
+import { useAuth } from "@/hooks/useAuth";
+import { useRole } from "@/hooks/useRole";
+import { signOut } from "@/services/auth";
 
 const cartCount = 0;
-const isAuthed = false;
-const showAdmin = false;
 
-const navItemClass =
-  "text-sm font-medium text-zinc-700 transition-colors hover:text-zinc-900";
-
-const mobileLinks = [
+const baseMobileLinks = [
   { href: "/", label: "Home" },
   { href: "/shop", label: "Shop" },
   { href: "/favorites", label: "Favorites" },
@@ -23,8 +22,37 @@ const mobileLinks = [
 
 export function Header() {
   const [open, setOpen] = useState(false);
-  const authLabel = isAuthed ? "Profile" : "Sign in";
-  const authHref = isAuthed ? "/orders" : "/signin";
+  const [accountOpen, setAccountOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const { user, loading } = useAuth();
+  const { role } = useRole(user);
+  const isAuthed = Boolean(user);
+  const showAdmin = role === "admin";
+
+  useEffect(() => {
+    if (!accountOpen) return;
+    const handler = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setAccountOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [accountOpen]);
+
+  const mobileLinks = useMemo(() => {
+    if (!showAdmin) return baseMobileLinks;
+    const withAdmin = [...baseMobileLinks];
+    withAdmin.splice(5, 0, { href: "/admin", label: "Admin" });
+    return withAdmin;
+  }, [showAdmin]);
+
+  const handleSignOut = async () => {
+    await signOut();
+    setAccountOpen(false);
+    setOpen(false);
+  };
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white/90 backdrop-blur">
@@ -49,28 +77,43 @@ export function Header() {
             />
           </form>
 
-          <div className="flex items-center gap-4">
-            <Link href={authHref} className={navItemClass}>
-              {authLabel}
-            </Link>
-            <Link href="/orders" className={navItemClass}>
-              Dashboard
-            </Link>
-            <Link href="/favorites" className={navItemClass}>
-              Favorites
+          <div className="flex items-center gap-3">
+            <Link
+              href="/favorites"
+              className="inline-flex h-10 items-center gap-2 rounded-full border border-zinc-200 px-3 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-900"
+            >
+              <IconHeart />
+              <span className="hidden lg:inline">Favorites</span>
             </Link>
             <Link
               href="/cart"
-              className="relative inline-flex items-center gap-2 text-sm font-medium text-zinc-700 transition-colors hover:text-zinc-900"
+              className="relative inline-flex h-10 items-center gap-2 rounded-full border border-zinc-200 px-3 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-900"
             >
-              Cart
+              <IconCart />
+              <span className="hidden lg:inline">Cart</span>
               <Badge className="bg-zinc-900 text-white">{cartCount}</Badge>
             </Link>
-            {showAdmin ? (
-              <Link href="/admin" className={navItemClass}>
-                Admin
+
+            {loading ? (
+              <div className="h-10 w-24 rounded-full bg-zinc-100" />
+            ) : isAuthed ? (
+              <AccountDropdown
+                open={accountOpen}
+                onToggle={() => setAccountOpen((prev) => !prev)}
+                onClose={() => setAccountOpen(false)}
+                onSignOut={handleSignOut}
+                showAdmin={showAdmin}
+                menuRef={menuRef}
+              />
+            ) : (
+              <Link
+                href="/signin"
+                className="inline-flex h-10 items-center gap-2 rounded-full border border-zinc-900 bg-zinc-900 px-4 text-sm font-medium text-white"
+              >
+                <IconUser />
+                <span className="hidden lg:inline">Sign in</span>
               </Link>
-            ) : null}
+            )}
           </div>
         </div>
 
@@ -102,17 +145,98 @@ export function Header() {
         </div>
       </div>
 
-      <MobileNavDrawer open={open} onClose={() => setOpen(false)} />
+      <MobileNavDrawer
+        open={open}
+        onClose={() => setOpen(false)}
+        links={mobileLinks}
+        loading={loading}
+        isAuthed={isAuthed}
+        onSignOut={handleSignOut}
+      />
     </header>
+  );
+}
+
+function AccountDropdown({
+  open,
+  onToggle,
+  onClose,
+  onSignOut,
+  showAdmin,
+  menuRef,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  onSignOut: () => void;
+  showAdmin: boolean;
+  menuRef: RefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="inline-flex h-10 items-center gap-2 rounded-full border border-zinc-200 px-3 text-sm font-medium text-zinc-700 transition hover:border-zinc-300 hover:text-zinc-900"
+        aria-expanded={open}
+      >
+        <IconUser />
+        <span className="hidden lg:inline">Account</span>
+        <IconChevron />
+      </button>
+
+      {open ? (
+        <div className="absolute right-0 mt-2 w-48 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg">
+          <Link
+            href="/orders"
+            className="block rounded-xl px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+            onClick={onClose}
+          >
+            Dashboard
+          </Link>
+          <Link
+            href="/favorites"
+            className="block rounded-xl px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+            onClick={onClose}
+          >
+            Favorites
+          </Link>
+          {showAdmin ? (
+            <Link
+              href="/admin"
+              className="block rounded-xl px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+              onClick={onClose}
+            >
+              Admin
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="mt-1 block w-full rounded-xl px-3 py-2 text-left text-sm text-zinc-700 hover:bg-zinc-50"
+          >
+            Sign out
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
 function MobileNavDrawer({
   open,
   onClose,
+  links,
+  loading,
+  isAuthed,
+  onSignOut,
 }: {
   open: boolean;
   onClose: () => void;
+  links: { href: string; label: string }[];
+  loading: boolean;
+  isAuthed: boolean;
+  onSignOut: () => void;
 }) {
   return (
     <div
@@ -143,7 +267,7 @@ function MobileNavDrawer({
           </button>
         </div>
         <nav className="mt-6 space-y-4">
-          {mobileLinks.map((link) => (
+          {links.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -154,6 +278,27 @@ function MobileNavDrawer({
             </Link>
           ))}
         </nav>
+        <div className="mt-6 border-t border-zinc-200 pt-4">
+          {loading ? (
+            <div className="h-10 w-32 rounded-full bg-zinc-100" />
+          ) : isAuthed ? (
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="inline-flex h-10 w-full items-center justify-center rounded-full border border-zinc-200 text-sm font-medium text-zinc-700"
+            >
+              Sign out
+            </button>
+          ) : (
+            <Link
+              href="/signin"
+              className="inline-flex h-10 w-full items-center justify-center rounded-full border border-zinc-900 bg-zinc-900 text-sm font-medium text-white"
+              onClick={onClose}
+            >
+              Sign in
+            </Link>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -195,3 +340,54 @@ function IconCart() {
   );
 }
 
+function IconHeart() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <path d="M12 20s-7-4.4-7-9a4 4 0 0 1 7-2.7A4 4 0 0 1 19 11c0 4.6-7 9-7 9Z" />
+    </svg>
+  );
+}
+
+function IconUser() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <path d="M20 21a8 8 0 0 0-16 0" />
+      <circle cx="12" cy="8" r="4" />
+    </svg>
+  );
+}
+
+function IconChevron() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+      aria-hidden="true"
+    >
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
