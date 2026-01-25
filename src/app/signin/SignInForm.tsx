@@ -177,33 +177,38 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
 function getAuthErrorMessage(error: unknown) {
   if (typeof error === "object" && error && "code" in error) {
     const code = String((error as { code?: string }).code);
+    const withCode = (message: string) => `${message} (${code})`;
     if (code.includes("invalid-credential") || code.includes("wrong-password")) {
-      return "Incorrect email or password.";
+      return withCode("Incorrect email or password.");
     }
     if (code.includes("user-not-found")) {
-      return "No account found for that email.";
+      return withCode("No account found for that email.");
     }
     if (code.includes("too-many-requests")) {
-      return "Too many attempts. Try again in a few minutes.";
+      return withCode("Too many attempts. Try again in a few minutes.");
     }
     if (code.includes("popup-closed-by-user")) {
-      return "Sign-in popup was closed.";
+      return withCode("Sign-in popup was closed.");
     }
     if (code.includes("popup-blocked")) {
-      return "Popup was blocked. Allow popups to continue.";
+      return withCode("Popup was blocked. Allow popups to continue.");
     }
     if (code.includes("cancelled-popup-request")) {
-      return "Sign-in popup was cancelled.";
+      return withCode("Sign-in popup was cancelled.");
     }
     if (code.includes("unauthorized-domain")) {
-      return "This domain is not authorized. Add localhost (and your domain) in Firebase Auth settings.";
+      return withCode(
+        "This domain is not authorized. Add localhost (and your domain) in Firebase Auth settings."
+      );
     }
     if (code.includes("operation-not-allowed")) {
-      return "This sign-in method is not enabled in Firebase.";
+      return withCode("This sign-in method is not enabled in Firebase.");
     }
     if (code.includes("network-request-failed")) {
-      return "Network error. Check your connection and try again.";
+      return withCode("Network error. Check your connection and try again.");
     }
+
+    return `Firebase error: ${code}`;
   }
 
   return "Unable to sign in. Please try again.";

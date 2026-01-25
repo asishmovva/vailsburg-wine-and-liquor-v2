@@ -200,33 +200,38 @@ export function SignUpForm({ nextPath }: { nextPath: string }) {
 function getAuthErrorMessage(error: unknown) {
   if (typeof error === "object" && error && "code" in error) {
     const code = String((error as { code?: string }).code);
+    const withCode = (message: string) => `${message} (${code})`;
     if (code.includes("email-already-in-use")) {
-      return "That email is already registered.";
+      return withCode("That email is already registered.");
     }
     if (code.includes("weak-password")) {
-      return "Password should be at least 6 characters.";
+      return withCode("Password should be at least 6 characters.");
     }
     if (code.includes("invalid-email")) {
-      return "Please enter a valid email.";
+      return withCode("Please enter a valid email.");
     }
     if (code.includes("popup-closed-by-user")) {
-      return "Sign-in popup was closed.";
+      return withCode("Sign-in popup was closed.");
     }
     if (code.includes("popup-blocked")) {
-      return "Popup was blocked. Allow popups to continue.";
+      return withCode("Popup was blocked. Allow popups to continue.");
     }
     if (code.includes("cancelled-popup-request")) {
-      return "Sign-in popup was cancelled.";
+      return withCode("Sign-in popup was cancelled.");
     }
     if (code.includes("unauthorized-domain")) {
-      return "This domain is not authorized. Add localhost (and your domain) in Firebase Auth settings.";
+      return withCode(
+        "This domain is not authorized. Add localhost (and your domain) in Firebase Auth settings."
+      );
     }
     if (code.includes("operation-not-allowed")) {
-      return "This sign-in method is not enabled in Firebase.";
+      return withCode("This sign-in method is not enabled in Firebase.");
     }
     if (code.includes("network-request-failed")) {
-      return "Network error. Check your connection and try again.";
+      return withCode("Network error. Check your connection and try again.");
     }
+
+    return `Firebase error: ${code}`;
   }
 
   return "Unable to create account. Please try again.";
