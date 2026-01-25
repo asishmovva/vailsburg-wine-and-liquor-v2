@@ -7,7 +7,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
-import { signIn } from "@/services/auth";
+import { signIn, signInWithGoogle } from "@/services/auth";
 
 export function SignInForm({ nextPath }: { nextPath: string }) {
   const router = useRouter();
@@ -33,6 +33,20 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
     }
   };
 
+  const handleGoogle = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      await signInWithGoogle();
+      router.replace(nextPath);
+    } catch (err) {
+      setError(getAuthErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-lg space-y-6">
       <div className="space-y-2">
@@ -43,6 +57,21 @@ export function SignInForm({ nextPath }: { nextPath: string }) {
       </div>
 
       <Card className="space-y-4">
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={handleGoogle}
+          disabled={loading}
+        >
+          Continue with Google
+        </Button>
+
+        <div className="flex items-center gap-3 text-xs text-zinc-400">
+          <div className="h-px flex-1 bg-zinc-200" />
+          <span>or</span>
+          <div className="h-px flex-1 bg-zinc-200" />
+        </div>
+
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-2">
             <label className="text-sm font-medium text-zinc-700" htmlFor="email">
@@ -122,6 +151,15 @@ function getAuthErrorMessage(error: unknown) {
     }
     if (code.includes("too-many-requests")) {
       return "Too many attempts. Try again in a few minutes.";
+    }
+    if (code.includes("popup-closed-by-user")) {
+      return "Sign-in popup was closed.";
+    }
+    if (code.includes("popup-blocked")) {
+      return "Popup was blocked. Allow popups to continue.";
+    }
+    if (code.includes("cancelled-popup-request")) {
+      return "Sign-in popup was cancelled.";
     }
   }
 

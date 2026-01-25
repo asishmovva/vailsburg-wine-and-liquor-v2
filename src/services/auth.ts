@@ -1,14 +1,29 @@
 ﻿import {
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut as firebaseSignOut,
   updateProfile,
 } from "firebase/auth";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 
+function getAuthClient() {
+  if (!auth || !db) {
+    throw new Error("Firebase client not initialized.");
+  }
+
+  return { auth, db };
+}
+
 export async function signIn(email: string, password: string) {
-  const credential = await signInWithEmailAndPassword(auth, email, password);
+  const { auth: authClient } = getAuthClient();
+  const credential = await signInWithEmailAndPassword(
+    authClient,
+    email,
+    password
+  );
   return credential.user;
 }
 
@@ -21,7 +36,12 @@ export async function signUp({
   password: string;
   name?: string;
 }) {
-  const credential = await createUserWithEmailAndPassword(auth, email, password);
+  const { auth: authClient, db: dbClient } = getAuthClient();
+  const credential = await createUserWithEmailAndPassword(
+    authClient,
+    email,
+    password
+  );
   if (name) {
     await updateProfile(credential.user, { displayName: name });
   }
@@ -36,13 +56,40 @@ export async function signUp({
     userDoc.name = name;
   }
 
-  await setDoc(doc(db, "users", credential.user.uid), userDoc, {
+  await setDoc(doc(dbClient, "users", credential.user.uid), userDoc, {
     merge: true,
   });
 
   return credential.user;
 }
 
+export async function signInWithGoogle() {
+  const { auth: authClient, db: dbClient } = getAuthClient();
+  const provider = new GoogleAuthProvider();
+  const credential = await signInWithPopup(authClient, provider);
+  const user = credential.user;
+
+  const userRef = doc(dbClient, "users", user.uid);
+  const snapshot = await getDoc(userRef);
+
+  if (!snapshot.exists()) {
+    const userDoc: Record<string, unknown> = {
+      role: "customer",
+      email: user.email ?? "",
+      createdAt: serverTimestamp(),
+    };
+
+    if (user.displayName) {
+      userDoc.name = user.displayName;
+    }
+
+    await setDoc(userRef, userDoc, { merge: true });
+  }
+
+  return user;
+}
+
 export async function signOut() {
-  await firebaseSignOut(auth);
+  const { auth: authClient } = getAuthClient();
+  await firebaseSignOut(authClient);
 }
