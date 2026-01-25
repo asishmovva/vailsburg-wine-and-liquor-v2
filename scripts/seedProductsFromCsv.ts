@@ -146,9 +146,7 @@ function parseCsv(content: string): RawRow[] {
 
 function getDatabaseId() {
   const raw = process.env.FIREBASE_DATABASE_ID;
-  if (!raw) return "(default)";
-  if (raw === "default") return "(default)";
-  return raw;
+  return raw && raw.trim() ? raw.trim() : "(default)";
 }
 
 let adminApp: App | null = getApps().length ? getApps()[0] : null;
@@ -361,15 +359,22 @@ async function main() {
   console.log("Sample rows:");
   console.log(sample);
 
-  const db = getFirestore(getAdminApp(), getDatabaseId());
+  const databaseId = getDatabaseId();
+  const db = getFirestore(getAdminApp(), databaseId);
   const collection = db.collection("products");
 
   const existingMap = new Map<string, FirebaseFirestore.DocumentSnapshot>();
 
-  for (const group of chunk(items, 500)) {
-    const refs = group.map((item) => collection.doc(item.id));
-    const snapshots = await db.getAll(...refs);
-    snapshots.forEach((snapshot) => existingMap.set(snapshot.id, snapshot));
+  try {
+    for (const group of chunk(items, 500)) {
+      const refs = group.map((item) => collection.doc(item.id));
+      const snapshots = await db.getAll(...refs);
+      snapshots.forEach((snapshot) => existingMap.set(snapshot.id, snapshot));
+    }
+  } catch (error) {
+    const message = `Firestore lookup failed for database ID "${databaseId}". ` +
+      `Verify FIREBASE_DATABASE_ID matches your Firestore database ID (often "(default)").`;
+    throw new Error(message, { cause: error as Error });
   }
 
   let created = 0;
