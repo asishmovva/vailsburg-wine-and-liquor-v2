@@ -1,22 +1,10 @@
-﻿"use client";
-
-import { useEffect, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { useAuth } from "@/hooks/useAuth";
-import { SignUpForm } from "./SignUpForm";
+﻿import { Suspense } from "react";
+import { SignUpClient } from "./SignUpClient";
 
 export default function SignUpPage() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const { user, loading } = useAuth();
-
-  const nextPath = useMemo(() => searchParams.get("next") ?? "/", [searchParams]);
-
-  useEffect(() => {
-    if (!loading && user) {
-      router.replace(nextPath);
-    }
-  }, [loading, user, router, nextPath]);
-
-  return <SignUpForm nextPath={nextPath} />;
+  return (
+    <Suspense fallback={<div className="text-sm text-zinc-600">Loading...</div>}>
+      <SignUpClient />
+    </Suspense>
+  );
 }
