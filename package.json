@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "seed:dry": "ts-node scripts/seedProductsFromCsv.ts --dry-run",
+    "seed:products": "ts-node scripts/seedProductsFromCsv.ts"
   },
   "dependencies": {
     "firebase": "^12.8.0",
@@ -23,6 +25,14 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.4",
     "tailwindcss": "^4",
+    "ts-node": "^10.9.2",
     "typescript": "^5"
+  },
+  "ts-node": {
+    "compilerOptions": {
+      "module": "commonjs",
+      "moduleResolution": "node",
+      "esModuleInterop": true
+    }
   }
 }
