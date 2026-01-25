@@ -4,6 +4,7 @@
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
+  type User,
   updateProfile,
 } from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
@@ -64,27 +65,12 @@ export async function signUp({
 }
 
 export async function signInWithGoogle() {
-  const { auth: authClient, db: dbClient } = getAuthClient();
+  const { auth: authClient } = getAuthClient();
   const provider = new GoogleAuthProvider();
   const credential = await signInWithPopup(authClient, provider);
   const user = credential.user;
 
-  const userRef = doc(dbClient, "users", user.uid);
-  const snapshot = await getDoc(userRef);
-
-  if (!snapshot.exists()) {
-    const userDoc: Record<string, unknown> = {
-      role: "customer",
-      email: user.email ?? "",
-      createdAt: serverTimestamp(),
-    };
-
-    if (user.displayName) {
-      userDoc.name = user.displayName;
-    }
-
-    await setDoc(userRef, userDoc, { merge: true });
-  }
+  await ensureUserProfile(user);
 
   return user;
 }
@@ -92,4 +78,32 @@ export async function signInWithGoogle() {
 export async function signOut() {
   const { auth: authClient } = getAuthClient();
   await firebaseSignOut(authClient);
+}
+
+export async function ensureUserProfile(
+  user: User,
+  extra?: { phone?: string | null }
+) {
+  const { db: dbClient } = getAuthClient();
+  const userRef = doc(dbClient, "users", user.uid);
+  const snapshot = await getDoc(userRef);
+
+  if (snapshot.exists()) return;
+
+  const userDoc: Record<string, unknown> = {
+    role: "customer",
+    email: user.email ?? "",
+    createdAt: serverTimestamp(),
+  };
+
+  if (user.displayName) {
+    userDoc.name = user.displayName;
+  }
+
+  const phone = extra?.phone ?? user.phoneNumber;
+  if (phone) {
+    userDoc.phone = phone;
+  }
+
+  await setDoc(userRef, userDoc, { merge: true });
 }

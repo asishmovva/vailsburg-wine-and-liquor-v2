@@ -29,6 +29,11 @@ const firebaseConfig = {
     "",
 };
 
+const databaseId =
+  process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID ??
+  process.env.FIREBASE_DATABASE_ID ??
+  "(default)";
+
 const isBrowser = typeof window !== "undefined";
 const app = isBrowser
   ? getApps().length
@@ -37,4 +42,6 @@ const app = isBrowser
   : null;
 
 export const auth = (isBrowser && app ? getAuth(app) : null) as Auth;
-export const db = (isBrowser && app ? getFirestore(app) : null) as Firestore;
+export const db = (isBrowser && app
+  ? getFirestore(app, databaseId)
+  : null) as Firestore;
