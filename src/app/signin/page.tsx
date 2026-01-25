@@ -1,14 +1,22 @@
-﻿import { SignInForm } from "./SignInForm";
+﻿"use client";
 
-type SearchParams = { next?: string } | Promise<{ next?: string }> | undefined;
+import { useEffect, useMemo } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useAuth } from "@/hooks/useAuth";
+import { SignInForm } from "./SignInForm";
 
-export default async function SignInPage({
-  searchParams,
-}: {
-  searchParams?: SearchParams;
-}) {
-  const resolvedParams = await Promise.resolve(searchParams);
-  const nextPath =
-    typeof resolvedParams?.next === "string" ? resolvedParams.next : "/";
+export default function SignInPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const { user, loading } = useAuth();
+
+  const nextPath = useMemo(() => searchParams.get("next") ?? "/", [searchParams]);
+
+  useEffect(() => {
+    if (!loading && user) {
+      router.replace(nextPath);
+    }
+  }, [loading, user, router, nextPath]);
+
   return <SignInForm nextPath={nextPath} />;
 }
