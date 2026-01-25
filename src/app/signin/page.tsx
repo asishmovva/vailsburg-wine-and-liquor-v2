@@ -1,10 +1,14 @@
 ﻿import { SignInForm } from "./SignInForm";
 
-export default function SignInPage({
+type SearchParams = { next?: string } | Promise<{ next?: string }> | undefined;
+
+export default async function SignInPage({
   searchParams,
 }: {
-  searchParams?: { next?: string };
+  searchParams?: SearchParams;
 }) {
-  const nextPath = typeof searchParams?.next === "string" ? searchParams.next : "/";
+  const resolvedParams = await Promise.resolve(searchParams);
+  const nextPath =
+    typeof resolvedParams?.next === "string" ? resolvedParams.next : "/";
   return <SignInForm nextPath={nextPath} />;
 }
