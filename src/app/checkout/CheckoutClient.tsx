@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -103,6 +104,19 @@ function writeLocalPrefs(prefs: CheckoutPrefs) {
   window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs));
 }
 
+function getGuestId() {
+  if (typeof window === "undefined") return "guest";
+  const key = "vw_guest_id";
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `guest_${Date.now()}`;
+  window.localStorage.setItem(key, id);
+  return id;
+}
+
 async function fetchGeocode(query: string, signal?: AbortSignal) {
   const response = await fetch(
     `/api/mapbox/geocode?query=${encodeURIComponent(query)}`,
@@ -127,6 +141,7 @@ async function fetchDistance(coords: Coordinates, signal?: AbortSignal) {
 export default function CheckoutClient() {
   const { items, loading } = useCart();
   const { user } = useAuth();
+  const router = useRouter();
 
   const [fulfillment, setFulfillment] = useState<Fulfillment>("delivery");
   const [tipMode, setTipMode] = useState<"percent" | "custom">("percent");
@@ -148,6 +163,8 @@ export default function CheckoutClient() {
     status: "idle",
   });
   const [coords, setCoords] = useState<Coordinates | null>(null);
+  const [creatingIntent, setCreatingIntent] = useState(false);
+  const [intentError, setIntentError] = useState<string | null>(null);
 
   const validationCache = useRef<{ key: string; result: ValidationState } | null>(
     null
@@ -445,6 +462,72 @@ export default function CheckoutClient() {
 
   const tipEnabled = fulfillment === "delivery";
 
+  const handleCreateIntent = async () => {
+    if (!canPlaceOrder || creatingIntent) return;
+    setIntentError(null);
+    setCreatingIntent(true);
+
+    try {
+      const idToken = user ? await user.getIdToken() : null;
+      const payload = {
+        items: items.map((item) => ({
+          productId: item.productId,
+          qty: item.qty,
+        })),
+        fulfillment,
+        address,
+        coords,
+        distanceMiles: validation.distanceMiles,
+        tipAmount: tipAmount,
+        guestId: user ? undefined : getGuestId(),
+        idToken,
+      };
+
+      const response = await fetch("/api/stripe/create-intent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = (await response.json()) as {
+        clientSecret?: string;
+        orderId?: string;
+        error?: string;
+        summary?: {
+          subtotal: number;
+          deliveryFee: number;
+          tipAmount: number;
+          tax: number;
+          total: number;
+          fulfillment: Fulfillment;
+          address?: Address;
+          items: Array<{ productId: string; name: string; price: number; qty: number }>;
+        };
+      };
+
+      if (!response.ok || !data.clientSecret || !data.orderId) {
+        throw new Error(data.error || "Unable to start payment.");
+      }
+
+      if (typeof window !== "undefined" && data.summary) {
+        window.sessionStorage.setItem(
+          `vw_order_summary_${data.orderId}`,
+          JSON.stringify(data.summary)
+        );
+      }
+
+      router.push(
+        `/checkout/payment?orderId=${encodeURIComponent(
+          data.orderId
+        )}&clientSecret=${encodeURIComponent(data.clientSecret)}`
+      );
+    } catch (error) {
+      setIntentError((error as Error).message || "Unable to start payment.");
+    } finally {
+      setCreatingIntent(false);
+    }
+  };
+
   if (loading && items.length === 0) {
     return <Card className="p-6 text-sm text-zinc-600">Loading checkout...</Card>;
   }
@@ -711,8 +794,15 @@ export default function CheckoutClient() {
               Validate your address to continue.
             </p>
           ) : null}
-          <Button disabled={!canPlaceOrder} aria-disabled={!canPlaceOrder}>
-            Place order (payment in Phase 8)
+          {intentError ? (
+            <p className="text-xs text-red-600">{intentError}</p>
+          ) : null}
+          <Button
+            disabled={!canPlaceOrder || creatingIntent}
+            aria-disabled={!canPlaceOrder || creatingIntent}
+            onClick={handleCreateIntent}
+          >
+            {creatingIntent ? "Starting payment..." : "Pay now"}
           </Button>
         </Card>
 
@@ -730,8 +820,12 @@ export default function CheckoutClient() {
               {formatMoney(totals.total)}
             </p>
           </div>
-          <Button disabled={!canPlaceOrder} aria-disabled={!canPlaceOrder}>
-            Place order
+          <Button
+            disabled={!canPlaceOrder || creatingIntent}
+            aria-disabled={!canPlaceOrder || creatingIntent}
+            onClick={handleCreateIntent}
+          >
+            {creatingIntent ? "Starting..." : "Pay now"}
           </Button>
         </div>
       </div>
