@@ -57,7 +57,7 @@ function getPlaceholder(category: string) {
   );
 }
 
-export default function ProductClient({ productId }: { productId: string }) {
+export default function ProductClient({ id }: { id: string }) {
   const router = useRouter();
   const { user } = useAuth();
 
@@ -74,12 +74,13 @@ export default function ProductClient({ productId }: { productId: string }) {
   );
 
   useEffect(() => {
+    if (!id) return;
     let active = true;
     setLoading(true);
     setError(null);
     setNotFound(false);
 
-    fetch(`/api/products/${encodeURIComponent(productId)}`)
+    fetch(`/api/products/${encodeURIComponent(id)}`)
       .then(async (res) => {
         if (res.status === 404) {
           throw new Error("not-found");
@@ -110,7 +111,7 @@ export default function ProductClient({ productId }: { productId: string }) {
     return () => {
       active = false;
     };
-  }, [productId]);
+  }, [id]);
 
   useEffect(() => {
     if (!user) {
@@ -173,7 +174,7 @@ export default function ProductClient({ productId }: { productId: string }) {
 
   const handleToggleFavorite = async (targetId: string) => {
     if (!user) {
-      router.push(`/signin?next=/product/${encodeURIComponent(productId)}`);
+      router.push(`/signin?next=/product/${encodeURIComponent(id)}`);
       return;
     }
 
