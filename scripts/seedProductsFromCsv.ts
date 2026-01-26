@@ -10,6 +10,7 @@ type NormalizedProduct = {
   id: string;
   createData: {
     name: string;
+    nameLower: string;
     category: string;
     subcategory: string;
     upc: string;
@@ -320,6 +321,7 @@ async function main() {
       id,
       createData: {
         name,
+        nameLower: name.toLowerCase(),
         category,
         subcategory: "",
         upc,
