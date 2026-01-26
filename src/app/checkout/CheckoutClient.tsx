@@ -140,6 +140,8 @@ export default function CheckoutClient() {
     zip: "",
   });
   const [addressSearch, setAddressSearch] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [manualSearch, setManualSearch] = useState(false);
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   const [validation, setValidation] = useState<ValidationState>({
@@ -206,7 +208,10 @@ export default function CheckoutClient() {
         state: stored.address.state || "NJ",
       }));
       const label = formatAddressLabel(stored.address);
-      if (label) setAddressSearch(label);
+      if (label) {
+        setAddressSearch(label);
+        setManualSearch(false);
+      }
       if (stored.coords) {
         setCoords(stored.coords);
         setValidation({
@@ -249,7 +254,10 @@ export default function CheckoutClient() {
             state: data.address.state || "NJ",
           }));
           const label = formatAddressLabel(data.address);
-          if (label) setAddressSearch(label);
+          if (label) {
+            setAddressSearch(label);
+            setManualSearch(false);
+          }
         }
         if (data.coords) {
           setCoords(data.coords);
@@ -309,6 +317,11 @@ export default function CheckoutClient() {
       return;
     }
 
+    if (!searchFocused || !manualSearch) {
+      setSuggestions([]);
+      return;
+    }
+
     if (!addressSearch.trim()) {
       setSuggestions([]);
       return;
@@ -331,7 +344,7 @@ export default function CheckoutClient() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [addressSearch, fulfillment]);
+  }, [addressSearch, fulfillment, manualSearch, searchFocused]);
 
   const validateAddress = useCallback(async (overrideCoords?: Coordinates) => {
     if (fulfillment !== "delivery") return;
@@ -355,15 +368,13 @@ export default function CheckoutClient() {
 
     try {
       let resolvedCoords = targetCoords;
-      let resolvedSuggestion: AddressSuggestion | null = null;
 
       if (!resolvedCoords) {
         const results = await fetchGeocode(query, controller.signal);
         if (!results.length) {
           throw new Error("Address not found");
         }
-        resolvedSuggestion = results[0];
-        resolvedCoords = resolvedSuggestion.coordinates;
+        resolvedCoords = results[0].coordinates;
       }
 
       const miles = await fetchDistance(resolvedCoords, controller.signal);
@@ -375,17 +386,6 @@ export default function CheckoutClient() {
       setValidation(result);
       validationCache.current = { key: cacheKey, result };
       setCoords(resolvedCoords);
-
-      if (resolvedSuggestion) {
-        setAddress((prev) => ({
-          ...prev,
-          street: prev.street || resolvedSuggestion.street,
-          city: prev.city || resolvedSuggestion.city,
-          state: "NJ",
-          zip: prev.zip || resolvedSuggestion.zip,
-        }));
-        setAddressSearch(resolvedSuggestion.label);
-      }
     } catch {
       if (controller.signal.aborted) return;
       setValidation({
@@ -422,6 +422,8 @@ export default function CheckoutClient() {
       zip: suggestion.zip,
     });
     setAddressSearch(suggestion.label);
+    setManualSearch(false);
+    setSearchFocused(false);
     setSuggestions([]);
     setCoords(suggestion.coordinates);
     void validateAddress(suggestion.coordinates);
@@ -502,7 +504,12 @@ export default function CheckoutClient() {
                   value={addressSearch}
                   onChange={(event) => {
                     setAddressSearch(event.target.value);
+                    setManualSearch(true);
                     setCoords(null);
+                  }}
+                  onFocus={() => setSearchFocused(true)}
+                  onBlur={() => {
+                    setTimeout(() => setSearchFocused(false), 150);
                   }}
                 />
                 {searching ? (
