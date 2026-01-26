@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { ProductGridSkeleton } from "@/components/ui/ProductGridSkeleton";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { addFavorite, fetchFavorites, removeFavorite } from "@/services/favorites";
 import type { Product, ProductSort } from "@/services/productTypes";
 
@@ -76,6 +77,7 @@ export default function ShopClient() {
   const searchParams = useSearchParams();
 
   const { user } = useAuth();
+  const { addItem } = useCart();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -233,6 +235,20 @@ export default function ShopClient() {
     }
   };
 
+  const handleAddToCart = (product: Product) => {
+    addItem({
+      productId: product.id,
+      qty: 1,
+      price: product.price,
+      name: product.name,
+      image: product.image,
+      category: product.category,
+      size: product.size ?? "",
+      pack: product.pack ?? "",
+      stock: product.stock,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -304,6 +320,7 @@ export default function ShopClient() {
               isFavorite={favorites.has(product.id)}
               favoritePending={favoritesPending.has(product.id)}
               onToggleFavorite={handleFavoriteToggle}
+              onAddToCart={handleAddToCart}
             />
           ))}
         </div>

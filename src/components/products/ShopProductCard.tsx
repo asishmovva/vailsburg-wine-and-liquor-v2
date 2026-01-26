@@ -54,11 +54,13 @@ export function ShopProductCard({
   isFavorite,
   onToggleFavorite,
   favoritePending,
+  onAddToCart,
 }: {
   product: Product;
   isFavorite: boolean;
   onToggleFavorite: (productId: string) => void;
   favoritePending?: boolean;
+  onAddToCart?: (product: Product) => void;
 }) {
   const placeholder = getPlaceholder(product.category);
 
@@ -127,10 +129,11 @@ export function ShopProductCard({
         <Button
           className="mt-auto w-full"
           variant="outline"
-          disabled
-          aria-disabled
+          disabled={!product.inStock}
+          aria-disabled={!product.inStock}
+          onClick={() => onAddToCart?.(product)}
         >
-          Add to cart
+          {product.inStock ? "Add to cart" : "Out of stock"}
         </Button>
       </div>
     </Card>

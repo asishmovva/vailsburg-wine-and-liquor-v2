@@ -128,6 +128,8 @@ export async function queryProducts(filters: ProductFilters) {
       image?: string;
       stock?: number;
       inStock?: boolean;
+      size?: string;
+      pack?: string;
       createdAt?: FirebaseFirestore.Timestamp | null;
     };
 
@@ -141,6 +143,8 @@ export async function queryProducts(filters: ProductFilters) {
       stock: typeof data.stock === "number" ? data.stock : 0,
       inStock: typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,
       createdAt: data.createdAt?.toMillis?.() ?? null,
+      size: data.size ?? "",
+      pack: data.pack ?? "",
     };
   });
 

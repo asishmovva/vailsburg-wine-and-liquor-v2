@@ -20,6 +20,8 @@ export type Product = {
   stock: number;
   inStock: boolean;
   createdAt?: number | null;
+  size?: string;
+  pack?: string;
 };
 
 export type ProductDetail = Product & {
