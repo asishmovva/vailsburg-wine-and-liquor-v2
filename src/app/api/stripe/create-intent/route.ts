@@ -9,6 +9,8 @@ export const dynamic = "force-dynamic";
 const DELIVERY_RADIUS_MILES = 8;
 const DELIVERY_FEE = 5.99;
 const MIN_DELIVERY_ORDER = 20;
+const TAX_RATE = 0.06625;
+const USE_STRIPE_TAX = process.env.USE_STRIPE_TAX === "true";
 
 type CartInputItem = {
   productId: string;
@@ -121,7 +123,7 @@ async function reverseGeocode(coords: { lat: number; lng: number }) {
   };
 }
 
-async function calculateTax({
+async function calculateStripeTax({
   items,
   deliveryFee,
   address,
@@ -186,6 +188,8 @@ export async function POST(request: Request) {
     const db = adminDb();
     const productsRef = db.collection("products");
     const orderItems: OrderItem[] = [];
+    let subtotalCents = 0;
+    let taxableSubtotalCents = 0;
 
     for (const item of items) {
       const productSnap = await productsRef.doc(item.productId).get();
@@ -199,6 +203,7 @@ export async function POST(request: Request) {
         name?: string;
         price?: number;
         stock?: number;
+        taxable?: boolean;
       };
       const stock = parseNumber(data.stock);
       const qty = Math.min(parseNumber(item.qty), stock);
@@ -208,18 +213,23 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
+      const price = parseNumber(data.price);
+      const priceCents = Math.round(price * 100);
+      const isTaxable = data.taxable === false ? false : true;
+      subtotalCents += priceCents * qty;
+      if (isTaxable) {
+        taxableSubtotalCents += priceCents * qty;
+      }
       orderItems.push({
         productId: item.productId,
         name: data.name ?? "Item",
-        price: parseNumber(data.price),
+        price,
         qty,
       });
     }
 
-    const subtotal = orderItems.reduce(
-      (total, item) => total + item.price * item.qty,
-      0
-    );
+    const subtotal = subtotalCents / 100;
+    const taxableSubtotal = taxableSubtotalCents / 100;
 
     let distanceMiles: number | null = null;
     let deliveryFee = 0;
@@ -267,20 +277,30 @@ export async function POST(request: Request) {
     const tipAmount =
       fulfillment === "delivery" ? Math.max(0, parseNumber(payload.tipAmount)) : 0;
 
-    let taxAddress = deliveryAddress;
-    if (!taxAddress) {
-      const storeCoords = getStoreCoords();
-      taxAddress = await reverseGeocode(storeCoords);
+    let taxCents = 0;
+    let taxRate = TAX_RATE;
+    let taxStrategy = "manual";
+
+    if (USE_STRIPE_TAX) {
+      let taxAddress = deliveryAddress;
+      if (!taxAddress) {
+        const storeCoords = getStoreCoords();
+        taxAddress = await reverseGeocode(storeCoords);
+      }
+      taxCents = await calculateStripeTax({
+        items: orderItems,
+        deliveryFee,
+        address: taxAddress,
+      });
+      taxStrategy = "stripe";
+      taxRate =
+        taxableSubtotalCents > 0 ? taxCents / taxableSubtotalCents : TAX_RATE;
+    } else {
+      taxCents = Math.round(taxableSubtotalCents * TAX_RATE);
     }
 
-    const taxCents = await calculateTax({
-      items: orderItems,
-      deliveryFee,
-      address: taxAddress,
-    });
-
     const totalCents =
-      Math.round(subtotal * 100) +
+      subtotalCents +
       Math.round(deliveryFee * 100) +
       Math.round(tipAmount * 100) +
       taxCents;
@@ -313,7 +333,10 @@ export async function POST(request: Request) {
       deliveryFee,
       tipAmount,
       subtotal,
+      taxableSubtotal,
       tax: taxCents / 100,
+      taxRate,
+      taxStrategy,
       total: totalCents / 100,
       items: orderItems,
       stripe: {
@@ -341,9 +364,12 @@ export async function POST(request: Request) {
       orderId,
       summary: {
         subtotal,
+        taxableSubtotal,
         deliveryFee,
         tipAmount,
         tax: taxCents / 100,
+        taxRate,
+        taxStrategy,
         total: totalCents / 100,
         fulfillment,
         address: deliveryAddress ?? undefined,
