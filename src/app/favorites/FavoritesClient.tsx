@@ -14,6 +14,7 @@ import { ShopProductCard } from "@/components/products/ShopProductCard";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ProductGridSkeleton } from "@/components/ui/ProductGridSkeleton";
+import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { db } from "@/lib/firebase";
@@ -160,7 +161,7 @@ export default function FavoritesClient() {
   const hasFavorites = useMemo(() => favoriteIds.length > 0, [favoriteIds]);
 
   const handleAddToCart = (product: Product) => {
-    addItem({
+    const result = addItem({
       productId: product.id,
       qty: 1,
       price: product.price,
@@ -171,6 +172,11 @@ export default function FavoritesClient() {
       pack: product.pack ?? "",
       stock: product.stock,
     });
+    if (result === "added") {
+      toast.success(`${product.name} added to cart`);
+    } else if (result === "invalid") {
+      toast.error("Could not add item. Try again.");
+    }
   };
 
   return (
