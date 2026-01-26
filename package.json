@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "seed:dry": "ts-node scripts/seedProductsFromCsv.ts --dry-run",
-    "seed:products": "ts-node scripts/seedProductsFromCsv.ts"
+    "seed:products": "ts-node scripts/seedProductsFromCsv.ts",
+    "backfill:name-lower:dry": "ts-node scripts/backfillNameLower.ts --dry-run",
+    "backfill:name-lower": "ts-node scripts/backfillNameLower.ts"
   },
   "dependencies": {
     "firebase": "^12.8.0",

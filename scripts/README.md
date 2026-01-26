@@ -31,3 +31,15 @@ Full import:
 ```bash
 pnpm ts-node scripts/seedProductsFromCsv.ts
 ```
+
+## Backfill nameLower (prefix search)
+
+If products already exist without `nameLower`, run the backfill:
+
+```bash
+pnpm ts-node scripts/backfillNameLower.ts --dry-run
+```
+
+```bash
+pnpm ts-node scripts/backfillNameLower.ts
+```
