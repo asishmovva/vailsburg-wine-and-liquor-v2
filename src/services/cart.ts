@@ -40,15 +40,8 @@ export type CartItemInput = Omit<CartItem, "updatedAt" | "qty"> & { qty?: number
 
 type Listener = () => void;
 
-const LOCAL_STORAGE_KEY = "vw_cart_items";
+const LOCAL_STORAGE_KEY = "vailsburg_cart_v1";
 const UPDATE_DEBOUNCE_MS = 300;
-
-let state: CartState = {
-  items: [],
-  loading: true,
-  error: null,
-  mode: "guest",
-};
 
 const listeners = new Set<Listener>();
 let initialized = false;
@@ -103,6 +96,15 @@ function clearLocalCart() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(LOCAL_STORAGE_KEY);
 }
+
+const initialItems = typeof window !== "undefined" ? readLocalCart() : [];
+
+let state: CartState = {
+  items: initialItems,
+  loading: true,
+  error: null,
+  mode: "guest",
+};
 
 function mapDocsToCart(snapshot: QuerySnapshot<DocumentData>) {
   return snapshot.docs.map((docSnap) => {
@@ -211,8 +213,9 @@ export function initCartStore() {
 
     if (!user) {
       stopCartSnapshot();
-      const items = readLocalCart();
-      setState({ items, loading: false, mode: "guest", error: null });
+      const nextItems = state.items.length ? state.items : readLocalCart();
+      updateStateItems(nextItems, "guest");
+      setState({ error: null });
       return;
     }
 

@@ -79,7 +79,7 @@ export default function CheckoutClient() {
   const canPlaceOrder =
     items.length > 0 && addressValid && meetsMinOrder && !loading;
 
-  if (loading) {
+  if (loading && items.length === 0) {
     return <Card className="p-6 text-sm text-zinc-600">Loading checkout...</Card>;
   }
 

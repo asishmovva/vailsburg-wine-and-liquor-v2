@@ -53,7 +53,7 @@ export default function CartClient() {
     setQtyDrafts((prev) => ({ ...prev, [productId]: String(clamped) }));
   };
 
-  if (loading) {
+  if (loading && items.length === 0) {
     return (
       <Card className="p-6 text-sm text-zinc-600">Loading cart...</Card>
     );
@@ -195,7 +195,7 @@ export default function CartClient() {
         <div className="flex w-full gap-3 sm:w-auto">
           <Link
             href="/shop"
-            className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-zinc-200 text-sm font-medium text-zinc-700"
+            className="inline-flex h-11 flex-1 items-center justify-center whitespace-nowrap rounded-full border border-zinc-200 text-sm font-medium text-zinc-700"
           >
             Continue shopping
           </Link>
