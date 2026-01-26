@@ -21,3 +21,9 @@ export type Product = {
   inStock: boolean;
   createdAt?: number | null;
 };
+
+export type ProductDetail = Product & {
+  size: string;
+  pack: string;
+  upc: string;
+};
