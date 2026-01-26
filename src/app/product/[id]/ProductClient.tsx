@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ProductGridSkeleton } from "@/components/ui/ProductGridSkeleton";
+import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { addFavorite, fetchFavorites, removeFavorite } from "@/services/favorites";
@@ -205,7 +206,7 @@ export default function ProductClient({ id }: { id: string }) {
   };
 
   const handleAddToCart = (target: Product | ProductDetail, qty: number) => {
-    addItem({
+    const result = addItem({
       productId: target.id,
       qty,
       price: target.price,
@@ -216,6 +217,12 @@ export default function ProductClient({ id }: { id: string }) {
       pack: target.pack ?? "",
       stock: target.stock,
     });
+    if (result === "added") {
+      const label = qty > 1 ? `${target.name} (x${qty}) added to cart` : `${target.name} added to cart`;
+      toast.success(label);
+    } else if (result === "invalid") {
+      toast.error("Could not add item. Try again.");
+    }
   };
 
   const placeholder = product ? getPlaceholder(product.category) : null;

@@ -37,17 +37,20 @@ export type CartState = {
 };
 
 export type CartItemInput = Omit<CartItem, "updatedAt" | "qty"> & { qty?: number };
+export type AddToCartResult = "added" | "throttled" | "invalid";
 
 type Listener = () => void;
 
 const LOCAL_STORAGE_KEY = "vailsburg_cart_v1";
 const UPDATE_DEBOUNCE_MS = 300;
+const ADD_COOLDOWN_MS = 600;
 
 const listeners = new Set<Listener>();
 let initialized = false;
 let currentUser: User | null = null;
 let cartUnsubscribe: (() => void) | null = null;
 const pendingWrites = new Map<string, ReturnType<typeof setTimeout>>();
+const lastAddAt = new Map<string, number>();
 
 function emit() {
   listeners.forEach((listener) => listener());
@@ -276,9 +279,16 @@ async function deleteCartItem(userId: string, productId: string) {
   await deleteDoc(doc(db, "users", userId, "cartItems", productId));
 }
 
-export function addToCart(input: CartItemInput) {
+export function addToCart(input: CartItemInput): AddToCartResult {
   const qtyToAdd = input.qty ?? 1;
-  if (qtyToAdd <= 0) return;
+  if (!input.productId || qtyToAdd <= 0 || input.stock <= 0) return "invalid";
+
+  const now = Date.now();
+  const lastAdd = lastAddAt.get(input.productId) ?? 0;
+  if (now - lastAdd < ADD_COOLDOWN_MS) {
+    return "throttled";
+  }
+  lastAddAt.set(input.productId, now);
 
   const existing = state.items.find((item) => item.productId === input.productId);
   const nextQty = Math.min(
@@ -286,7 +296,7 @@ export function addToCart(input: CartItemInput) {
     input.stock
   );
 
-  if (nextQty <= 0) return;
+  if (nextQty <= 0) return "invalid";
 
   const nextItem: CartItem = {
     productId: input.productId,
@@ -312,6 +322,8 @@ export function addToCart(input: CartItemInput) {
   if (state.mode === "user" && currentUser) {
     scheduleWrite(input.productId, () => writeCartItem(currentUser!.uid, nextItem));
   }
+
+  return "added";
 }
 
 export function updateCartQty(productId: string, qty: number, stock: number) {

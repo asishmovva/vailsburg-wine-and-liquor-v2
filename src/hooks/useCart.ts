@@ -10,6 +10,7 @@ import {
   removeFromCart,
   subscribe,
   updateCartQty,
+  type AddToCartResult,
   type CartItemInput,
 } from "@/services/cart";
 
@@ -23,7 +24,7 @@ export function useCart() {
 
   const totalQty = getTotalQty(state.items);
 
-  const addItem = (input: CartItemInput) => addToCart(input);
+  const addItem = (input: CartItemInput): AddToCartResult => addToCart(input);
   const updateQty = (productId: string, qty: number, stock: number) =>
     updateCartQty(productId, qty, stock);
   const removeItem = (productId: string) => removeFromCart(productId);

@@ -1,6 +1,7 @@
-﻿import type { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Footer } from "@/components/layout/Footer";
 import { Header } from "@/components/layout/Header";
+import { ToastViewport } from "@/components/ui/Toast";
 
 interface AppLayoutProps {
   children: ReactNode;
@@ -14,7 +15,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         {children}
       </main>
       <Footer />
+      <ToastViewport />
     </div>
   );
 }
-
