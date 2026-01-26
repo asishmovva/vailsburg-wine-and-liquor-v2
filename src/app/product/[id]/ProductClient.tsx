@@ -313,7 +313,7 @@ export default function ProductClient({ id }: { id: string }) {
             <p className="text-lg text-zinc-800">
               ${product.price.toFixed(2)}
             </p>
-            <p className="text-xs text-zinc-500">Tax added at checkout</p>
+            <p className="text-xs text-zinc-500">Tax calculated at checkout</p>
           </div>
 
           <Card className="space-y-4">

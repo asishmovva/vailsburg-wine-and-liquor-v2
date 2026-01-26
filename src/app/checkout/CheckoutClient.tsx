@@ -495,13 +495,21 @@ export default function CheckoutClient() {
         error?: string;
         summary?: {
           subtotal: number;
+          taxableSubtotal: number;
           deliveryFee: number;
-          tipAmount: number;
+          tip: number;
           tax: number;
           total: number;
           fulfillment: Fulfillment;
           address?: Address;
-          items: Array<{ productId: string; name: string; price: number; qty: number }>;
+          items: Array<{
+            productId: string;
+            name: string;
+            price: number;
+            qty: number;
+            image?: string | null;
+            category?: string;
+          }>;
         };
       };
 
@@ -777,7 +785,7 @@ export default function CheckoutClient() {
             ) : null}
             <div className="flex items-center justify-between">
               <span>Tax</span>
-              <span>Added at payment</span>
+              <span>Calculated at checkout</span>
             </div>
           </div>
           <div className="flex items-center justify-between border-t border-zinc-200 pt-4 text-base font-semibold">
@@ -807,7 +815,7 @@ export default function CheckoutClient() {
         </Card>
 
         <Card className="space-y-2 text-xs text-zinc-500">
-          <p>Tax added at payment.</p>
+          <p>Tax calculated at checkout.</p>
           <p>Same-day delivery only.</p>
         </Card>
       </div>

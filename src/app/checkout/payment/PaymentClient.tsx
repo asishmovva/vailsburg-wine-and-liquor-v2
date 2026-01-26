@@ -8,6 +8,7 @@ import { loadStripe } from "@stripe/stripe-js";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { useCart } from "@/hooks/useCart";
+import { useAuth } from "@/hooks/useAuth";
 
 const stripePromise = loadStripe(
   process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? ""
@@ -15,8 +16,9 @@ const stripePromise = loadStripe(
 
 type OrderSummary = {
   subtotal: number;
+  taxableSubtotal?: number;
   deliveryFee: number;
-  tipAmount: number;
+  tip: number;
   tax: number;
   total: number;
   fulfillment: "delivery" | "pickup";
@@ -27,21 +29,40 @@ type OrderSummary = {
     state: string;
     zip: string;
   };
-  items: Array<{ productId: string; name: string; price: number; qty: number }>;
+  items: Array<{
+    productId: string;
+    name: string;
+    price: number;
+    qty: number;
+    image?: string | null;
+    category?: string;
+  }>;
 };
 
 function formatMoney(value: number) {
   return `$${value.toFixed(2)}`;
 }
 
+const GUEST_ORDERS_KEY = "vw_guest_orders_v1";
+
+function recordGuestOrder(orderId: string) {
+  if (typeof window === "undefined") return;
+  const raw = window.localStorage.getItem(GUEST_ORDERS_KEY);
+  const existing = raw ? (JSON.parse(raw) as string[]) : [];
+  const next = [orderId, ...existing.filter((id) => id !== orderId)].slice(0, 10);
+  window.localStorage.setItem(GUEST_ORDERS_KEY, JSON.stringify(next));
+}
+
 function PaymentForm({
   clientSecret,
   orderId,
   summary,
+  isGuest,
 }: {
   clientSecret: string;
   orderId: string;
   summary: OrderSummary | null;
+  isGuest: boolean;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -82,6 +103,9 @@ function PaymentForm({
           JSON.stringify({ orderId, ...summary })
         );
       }
+      if (isGuest) {
+        recordGuestOrder(orderId);
+      }
       clear();
       router.replace(`/order/success?orderId=${encodeURIComponent(orderId)}`);
       return;
@@ -121,6 +145,7 @@ export default function PaymentClient() {
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId") ?? "";
   const clientSecret = searchParams.get("clientSecret") ?? "";
+  const { user } = useAuth();
 
   const summary = useMemo(() => {
     if (!orderId || typeof window === "undefined") return null;
@@ -132,6 +157,10 @@ export default function PaymentClient() {
       return null;
     }
   }, [orderId]);
+
+  const tipValue = summary
+    ? summary.tip ?? (summary as OrderSummary & { tipAmount?: number }).tipAmount ?? 0
+    : 0;
 
   const stripeReady = Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY);
 
@@ -148,7 +177,8 @@ export default function PaymentClient() {
   if (!stripeReady) {
     return (
       <Card className="p-6 text-sm text-red-600">
-        Stripe publishable key is missing.
+        Stripe publishable key is missing. Set NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+        and restart the dev server.
       </Card>
     );
   }
@@ -172,7 +202,12 @@ export default function PaymentClient() {
         </div>
 
         <Elements stripe={stripePromise} options={elementsOptions}>
-          <PaymentForm clientSecret={clientSecret} orderId={orderId} summary={summary} />
+          <PaymentForm
+            clientSecret={clientSecret}
+            orderId={orderId}
+            summary={summary}
+            isGuest={!user}
+          />
         </Elements>
       </div>
 
@@ -194,7 +229,7 @@ export default function PaymentClient() {
               {summary.fulfillment === "delivery" ? (
                 <div className="flex items-center justify-between">
                   <span>Tip</span>
-                  <span>{formatMoney(summary.tipAmount)}</span>
+                  <span>{formatMoney(tipValue)}</span>
                 </div>
               ) : null}
               <div className="flex items-center justify-between">

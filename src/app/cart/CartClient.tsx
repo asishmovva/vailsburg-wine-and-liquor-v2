@@ -190,7 +190,7 @@ export default function CartClient() {
           <p className="text-2xl font-semibold text-zinc-900">
             {formatMoney(subtotal)}
           </p>
-          <p className="text-xs text-zinc-500">Tax added at checkout.</p>
+          <p className="text-xs text-zinc-500">Tax calculated at checkout.</p>
         </div>
         <div className="flex w-full gap-3 sm:w-auto">
           <Link
