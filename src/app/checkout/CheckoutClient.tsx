@@ -190,7 +190,14 @@ export default function CheckoutClient() {
     (fulfillment === "pickup" || (deliveryEligible && meetsMinOrder));
 
   const addressQuery = useMemo(() => {
-    if (addressSearch.trim()) return addressSearch.trim();
+    const searchValue = addressSearch.trim();
+    if (searchValue) return searchValue;
+
+    const hasStreet = address.street.trim().length > 2;
+    const hasCity = address.city.trim().length > 1;
+    const hasZip = address.zip.trim().length >= 4;
+    if (!(hasStreet && hasCity && hasZip)) return "";
+
     const parts = [address.street, address.city, address.state, address.zip]
       .map((value) => value.trim())
       .filter(Boolean);
@@ -322,7 +329,7 @@ export default function CheckoutClient() {
       return;
     }
 
-    if (!addressSearch.trim()) {
+    if (addressSearch.trim().length < 3) {
       setSuggestions([]);
       return;
     }
