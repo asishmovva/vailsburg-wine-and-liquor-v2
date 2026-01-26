@@ -24,6 +24,19 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 - Phone sign-in requires Firebase billing for real SMS delivery. For QA/dev, use Firebase Auth test phone numbers.
 
+## Mapbox setup (Phase 7)
+
+Add these to your `.env.local` (do not commit tokens):
+
+```
+MAPBOX_TOKEN=your_secret_token_here
+NEXT_PUBLIC_MAPBOX_TOKEN=your_public_token_here
+STORE_LAT=40.7
+STORE_LNG=-74.2
+```
+
+The server routes `/api/mapbox/geocode` and `/api/mapbox/distance` use `MAPBOX_TOKEN` and store coordinates to validate delivery distance.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
