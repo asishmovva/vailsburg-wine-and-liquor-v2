@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ProductGridSkeleton } from "@/components/ui/ProductGridSkeleton";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { addFavorite, fetchFavorites, removeFavorite } from "@/services/favorites";
 import type { Product, ProductDetail } from "@/services/productTypes";
 
@@ -60,6 +61,7 @@ function getPlaceholder(category: string) {
 export default function ProductClient({ id }: { id: string }) {
   const router = useRouter();
   const { user } = useAuth();
+  const { addItem } = useCart();
 
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [related, setRelated] = useState<Product[]>([]);
@@ -200,6 +202,20 @@ export default function ProductClient({ id }: { id: string }) {
         return next;
       });
     }
+  };
+
+  const handleAddToCart = (target: Product | ProductDetail, qty: number) => {
+    addItem({
+      productId: target.id,
+      qty,
+      price: target.price,
+      name: target.name,
+      image: target.image,
+      category: target.category,
+      size: target.size ?? "",
+      pack: target.pack ?? "",
+      stock: target.stock,
+    });
   };
 
   const placeholder = product ? getPlaceholder(product.category) : null;
@@ -362,6 +378,7 @@ export default function ProductClient({ id }: { id: string }) {
                 className="flex-1"
                 disabled={!product.inStock}
                 aria-disabled={!product.inStock}
+                onClick={() => handleAddToCart(product, quantity)}
               >
                 Add to cart
               </Button>
@@ -397,6 +414,7 @@ export default function ProductClient({ id }: { id: string }) {
                 isFavorite={favorites.has(item.id)}
                 favoritePending={favoritesPending.has(item.id)}
                 onToggleFavorite={handleToggleFavorite}
+                onAddToCart={(productItem) => handleAddToCart(productItem, 1)}
               />
             ))}
           </div>
@@ -418,6 +436,7 @@ export default function ProductClient({ id }: { id: string }) {
             className="flex-1"
             disabled={!product.inStock}
             aria-disabled={!product.inStock}
+            onClick={() => handleAddToCart(product, quantity)}
           >
             Add to cart
           </Button>

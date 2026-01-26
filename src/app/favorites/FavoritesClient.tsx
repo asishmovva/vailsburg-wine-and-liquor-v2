@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ProductGridSkeleton } from "@/components/ui/ProductGridSkeleton";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { db } from "@/lib/firebase";
 import { addFavorite, removeFavorite } from "@/services/favorites";
 import type { Product } from "@/services/productTypes";
@@ -67,6 +68,7 @@ async function fetchProductsByIds(ids: string[]) {
 export default function FavoritesClient() {
   const router = useRouter();
   const { user } = useAuth();
+  const { addItem } = useCart();
 
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
@@ -157,6 +159,20 @@ export default function FavoritesClient() {
 
   const hasFavorites = useMemo(() => favoriteIds.length > 0, [favoriteIds]);
 
+  const handleAddToCart = (product: Product) => {
+    addItem({
+      productId: product.id,
+      qty: 1,
+      price: product.price,
+      name: product.name,
+      image: product.image,
+      category: product.category,
+      size: product.size ?? "",
+      pack: product.pack ?? "",
+      stock: product.stock,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="space-y-2">
@@ -188,6 +204,7 @@ export default function FavoritesClient() {
               isFavorite={favorites.has(product.id)}
               favoritePending={favoritesPending.has(product.id)}
               onToggleFavorite={handleToggleFavorite}
+              onAddToCart={handleAddToCart}
             />
           ))}
         </div>

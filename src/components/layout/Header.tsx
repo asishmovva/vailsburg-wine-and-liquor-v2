@@ -6,10 +6,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { useRole } from "@/hooks/useRole";
 import { signOut } from "@/services/auth";
-
-const cartCount = 0;
 
 const baseMobileLinks = [
   { href: "/", label: "Home" },
@@ -29,6 +28,7 @@ export function Header() {
   const { role } = useRole(user);
   const isAuthed = Boolean(user);
   const showAdmin = role === "admin";
+  const { totalQty } = useCart();
 
   useEffect(() => {
     if (!accountOpen) return;
@@ -91,7 +91,7 @@ export function Header() {
             >
               <IconCart />
               <span className="hidden lg:inline">Cart</span>
-              <Badge className="bg-zinc-900 text-white">{cartCount}</Badge>
+              <Badge className="bg-zinc-900 text-white">{totalQty}</Badge>
             </Link>
 
             {loading ? (
@@ -139,7 +139,7 @@ export function Header() {
           >
             <IconCart />
             <Badge className="absolute -right-2 -top-2 h-5 min-w-5 justify-center px-1">
-              {cartCount}
+              {totalQty}
             </Badge>
           </Link>
         </div>
