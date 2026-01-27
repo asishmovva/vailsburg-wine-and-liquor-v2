@@ -37,6 +37,17 @@ STORE_LNG=-74.2
 
 The server routes `/api/mapbox/geocode` and `/api/mapbox/distance` use `MAPBOX_TOKEN` and store coordinates to validate delivery distance.
 
+## Stripe setup (Phase 8)
+
+Add these to your `.env.local` (do not commit secrets):
+
+```
+STRIPE_SECRET_KEY=sk_test_...
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+USE_STRIPE_TAX=false
+```
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
