@@ -6,6 +6,27 @@ import { getStripe } from "@/lib/stripe";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type OrderData = {
+  status?: string;
+  userId?: string | null;
+  items?: Array<{ productId: string; qty: number }>;
+  total?: number;
+  fulfillment?: "delivery" | "pickup";
+  createdAt?: unknown;
+  stripe?: { paymentIntentId?: string; checkoutSessionId?: string };
+};
+
+function buildPointer(orderId: string, order: OrderData) {
+  return {
+    orderId,
+    status: "paid",
+    total: order.total ?? 0,
+    fulfillment: order.fulfillment ?? "pickup",
+    createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
 export async function POST(request: Request) {
   const stripe = getStripe();
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -34,6 +55,144 @@ export async function POST(request: Request) {
   }
 
   const db = adminDb();
+  const eventId = event.id as string;
+  const eventType = event.type as string;
+
+  let orderIdFromEvent: string | undefined;
+  let paymentIntentId: string | undefined;
+  let checkoutSessionId: string | undefined;
+
+  if (eventType.startsWith("payment_intent.")) {
+    const intent = event.data.object as { id: string; metadata?: Record<string, string> };
+    paymentIntentId = intent.id;
+    orderIdFromEvent = intent.metadata?.orderId;
+  }
+
+  if (eventType === "checkout.session.completed") {
+    const session = event.data.object as {
+      id: string;
+      payment_intent?: string | null;
+      metadata?: Record<string, string>;
+    };
+    checkoutSessionId = session.id;
+    paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : paymentIntentId;
+    orderIdFromEvent = session.metadata?.orderId;
+  }
+
+  console.log("[stripe:webhook]", {
+    eventId,
+    eventType,
+    orderId: orderIdFromEvent ?? null,
+    paymentIntentId: paymentIntentId ?? null,
+    checkoutSessionId: checkoutSessionId ?? null,
+  });
+
+  const eventRef = db.collection("stripeEvents").doc(eventId);
+  const eventSnap = await eventRef.get();
+  if (eventSnap.exists) {
+    console.log("[stripe:webhook] duplicate", { eventId, eventType });
+    return NextResponse.json({ received: true, duplicate: true });
+  }
+
+  await eventRef.set({
+    eventId,
+    type: eventType,
+    orderId: orderIdFromEvent ?? null,
+    paymentIntentId: paymentIntentId ?? null,
+    checkoutSessionId: checkoutSessionId ?? null,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as {
+      id: string;
+      payment_status?: string;
+      payment_intent?: string | null;
+      metadata?: Record<string, string>;
+    };
+    const orderId = session.metadata?.orderId;
+    if (!orderId) {
+      return NextResponse.json({ received: true });
+    }
+
+    if (session.payment_status !== "paid") {
+      return NextResponse.json({ received: true });
+    }
+
+    const orderRef = db.collection("orders").doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) {
+      return NextResponse.json({ received: true });
+    }
+
+    const orderData = orderSnap.data() as OrderData;
+    if (orderData.status === "paid" || orderData.status === "fulfilled") {
+      if (orderData.userId) {
+        await db
+          .collection("users")
+          .doc(orderData.userId)
+          .collection("orders")
+          .doc(orderId)
+          .set(buildPointer(orderId, orderData), { merge: true });
+      }
+      return NextResponse.json({ received: true });
+    }
+
+    const items = orderData.items ?? [];
+    let inventoryWarning = false;
+    const intentId =
+      typeof session.payment_intent === "string"
+        ? session.payment_intent
+        : orderData.stripe?.paymentIntentId;
+
+    await db.runTransaction(async (transaction) => {
+      const productRefs = items.map((item) =>
+        db.collection("products").doc(item.productId)
+      );
+      const productSnaps = productRefs.length
+        ? await transaction.getAll(...productRefs)
+        : [];
+
+      productSnaps.forEach((productSnap, index) => {
+        if (!productSnap.exists) return;
+        const item = items[index];
+        const data = productSnap.data() as { stock?: number };
+        const currentStock = Number(data.stock ?? 0);
+        const updatedStock = Math.max(currentStock - item.qty, 0);
+        if (currentStock - item.qty < 0) inventoryWarning = true;
+
+        transaction.update(productSnap.ref, {
+          stock: updatedStock,
+          inStock: updatedStock > 0,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      });
+
+      transaction.update(orderRef, {
+        status: "paid",
+        inventoryWarning,
+        paidAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        stripe: {
+          paymentIntentId: intentId ?? null,
+          checkoutSessionId: session.id,
+        },
+      });
+
+      if (orderData.userId) {
+        const pointerRef = db
+          .collection("users")
+          .doc(orderData.userId)
+          .collection("orders")
+          .doc(orderId);
+        transaction.set(pointerRef, buildPointer(orderId, orderData), {
+          merge: true,
+        });
+      }
+    });
+
+    return NextResponse.json({ received: true });
+  }
 
   if (event.type === "payment_intent.succeeded") {
     const intent = event.data.object as {
@@ -52,40 +211,74 @@ export async function POST(request: Request) {
       return NextResponse.json({ received: true });
     }
 
-    const orderData = orderSnap.data() as {
-      items?: Array<{ productId: string; qty: number }>;
-    };
-    const items = orderData.items ?? [];
+    const orderData = orderSnap.data() as OrderData;
+    if (
+      orderData.stripe?.paymentIntentId &&
+      orderData.stripe.paymentIntentId !== intent.id
+    ) {
+      return NextResponse.json({ received: true });
+    }
 
+    if (orderData.status === "paid" || orderData.status === "fulfilled") {
+      if (orderData.userId) {
+        await db
+          .collection("users")
+          .doc(orderData.userId)
+          .collection("orders")
+          .doc(orderId)
+          .set(buildPointer(orderId, orderData), { merge: true });
+      }
+      return NextResponse.json({ received: true });
+    }
+
+    const items = orderData.items ?? [];
     let inventoryWarning = false;
     const receiptUrl = intent.charges?.data?.[0]?.receipt_url ?? null;
 
     await db.runTransaction(async (transaction) => {
-      for (const item of items) {
-        const productRef = db.collection("products").doc(item.productId);
-        const productSnap = await transaction.get(productRef);
-        if (!productSnap.exists) continue;
+      const productRefs = items.map((item) =>
+        db.collection("products").doc(item.productId)
+      );
+      const productSnaps = productRefs.length
+        ? await transaction.getAll(...productRefs)
+        : [];
+
+      productSnaps.forEach((productSnap, index) => {
+        if (!productSnap.exists) return;
+        const item = items[index];
         const data = productSnap.data() as { stock?: number };
         const currentStock = Number(data.stock ?? 0);
         const updatedStock = Math.max(currentStock - item.qty, 0);
         if (currentStock - item.qty < 0) inventoryWarning = true;
 
-        transaction.update(productRef, {
+        transaction.update(productSnap.ref, {
           stock: updatedStock,
           inStock: updatedStock > 0,
           updatedAt: FieldValue.serverTimestamp(),
         });
-      }
+      });
 
       transaction.update(orderRef, {
         status: "paid",
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
         stripe: {
           paymentIntentId: intent.id,
           receiptUrl,
         },
       });
+
+      if (orderData.userId) {
+        const pointerRef = db
+          .collection("users")
+          .doc(orderData.userId)
+          .collection("orders")
+          .doc(orderId);
+        transaction.set(pointerRef, buildPointer(orderId, orderData), {
+          merge: true,
+        });
+      }
     });
 
     return NextResponse.json({ received: true });
@@ -95,10 +288,35 @@ export async function POST(request: Request) {
     const intent = event.data.object as { metadata?: Record<string, string> };
     const orderId = intent.metadata?.orderId;
     if (orderId) {
-      await db.collection("orders").doc(orderId).update({
-        status: "failed",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      const orderRef = db.collection("orders").doc(orderId);
+      const orderSnap = await orderRef.get();
+      if (orderSnap.exists) {
+        const orderData = orderSnap.data() as OrderData;
+        if (orderData.status !== "paid" && orderData.status !== "fulfilled") {
+          await orderRef.update({
+            status: "failed",
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          if (orderData.userId) {
+            await db
+              .collection("users")
+              .doc(orderData.userId)
+              .collection("orders")
+              .doc(orderId)
+              .set(
+                {
+                  orderId,
+                  status: "failed",
+                  total: orderData.total ?? 0,
+                  fulfillment: orderData.fulfillment ?? "pickup",
+                  createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+          }
+        }
+      }
     }
     return NextResponse.json({ received: true });
   }
@@ -107,10 +325,35 @@ export async function POST(request: Request) {
     const intent = event.data.object as { metadata?: Record<string, string> };
     const orderId = intent.metadata?.orderId;
     if (orderId) {
-      await db.collection("orders").doc(orderId).update({
-        status: "cancelled",
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      const orderRef = db.collection("orders").doc(orderId);
+      const orderSnap = await orderRef.get();
+      if (orderSnap.exists) {
+        const orderData = orderSnap.data() as OrderData;
+        if (orderData.status !== "paid" && orderData.status !== "fulfilled") {
+          await orderRef.update({
+            status: "cancelled",
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          if (orderData.userId) {
+            await db
+              .collection("users")
+              .doc(orderData.userId)
+              .collection("orders")
+              .doc(orderId)
+              .set(
+                {
+                  orderId,
+                  status: "cancelled",
+                  total: orderData.total ?? 0,
+                  fulfillment: orderData.fulfillment ?? "pickup",
+                  createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),
+                  updatedAt: FieldValue.serverTimestamp(),
+                },
+                { merge: true }
+              );
+          }
+        }
+      }
     }
     return NextResponse.json({ received: true });
   }

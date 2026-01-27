@@ -104,19 +104,6 @@ function writeLocalPrefs(prefs: CheckoutPrefs) {
   window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs));
 }
 
-function getGuestId() {
-  if (typeof window === "undefined") return "guest";
-  const key = "vw_guest_id";
-  const existing = window.localStorage.getItem(key);
-  if (existing) return existing;
-  const id =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `guest_${Date.now()}`;
-  window.localStorage.setItem(key, id);
-  return id;
-}
-
 async function fetchGeocode(query: string, signal?: AbortSignal) {
   const response = await fetch(
     `/api/mapbox/geocode?query=${encodeURIComponent(query)}`,
@@ -479,7 +466,6 @@ export default function CheckoutClient() {
         coords,
         distanceMiles: validation.distanceMiles,
         tipAmount: tipAmount,
-        guestId: user ? undefined : getGuestId(),
         idToken,
       };
 
@@ -495,13 +481,21 @@ export default function CheckoutClient() {
         error?: string;
         summary?: {
           subtotal: number;
+          taxableSubtotal: number;
           deliveryFee: number;
-          tipAmount: number;
+          tip: number;
           tax: number;
           total: number;
           fulfillment: Fulfillment;
           address?: Address;
-          items: Array<{ productId: string; name: string; price: number; qty: number }>;
+          items: Array<{
+            productId: string;
+            name: string;
+            price: number;
+            qty: number;
+            image?: string | null;
+            category?: string;
+          }>;
         };
       };
 
@@ -777,7 +771,7 @@ export default function CheckoutClient() {
             ) : null}
             <div className="flex items-center justify-between">
               <span>Tax</span>
-              <span>Added at payment</span>
+              <span>Calculated at checkout</span>
             </div>
           </div>
           <div className="flex items-center justify-between border-t border-zinc-200 pt-4 text-base font-semibold">
@@ -807,7 +801,7 @@ export default function CheckoutClient() {
         </Card>
 
         <Card className="space-y-2 text-xs text-zinc-500">
-          <p>Tax added at payment.</p>
+          <p>Tax calculated at checkout.</p>
           <p>Same-day delivery only.</p>
         </Card>
       </div>
