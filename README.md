@@ -48,6 +48,19 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 USE_STRIPE_TAX=false
 ```
 
+## Sypram setup (Phase 9)
+
+Add these to your `.env.local` (do not commit secrets):
+
+```
+SYPRAM_BASE_URL=https://DataServices.sypramsoftware.com
+SYPRAM_USERID=your_sypram_username
+SYPRAM_PASSWORD=your_sypram_password
+SYPRAM_PIN=your_sypram_pin
+```
+
+Sypram sync runs server-side only and is guarded by a 30-minute cooldown.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
