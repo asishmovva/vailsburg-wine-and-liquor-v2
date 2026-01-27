@@ -1,14 +1,16 @@
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import OrderDetailClient from "./OrderDetailClient";
 
-export default function OrderDetailPage({
+export default async function OrderDetailPage({
   params,
 }: {
-  params: { orderId: string };
+  params: Promise<{ orderId: string }>;
 }) {
+  const { orderId } = await params;
+
   return (
-    <RequireAuth redirectTo={`/orders/${params.orderId}`}>
-      <OrderDetailClient orderId={params.orderId} />
+    <RequireAuth redirectTo={`/orders/${orderId}`}>
+      <OrderDetailClient orderId={orderId} />
     </RequireAuth>
   );
 }
