@@ -11,6 +11,7 @@ type SyncCounts = {
   updated: number;
   skipped: number;
   errors: number;
+  blocked?: number;
 };
 
 type SyncSummary = SyncCounts & {
@@ -178,6 +179,9 @@ export default function AdminSyncPage() {
                 {overview.state.lastSummary.updated} updated,{" "}
                 {overview.state.lastSummary.skipped} skipped,{" "}
                 {overview.state.lastSummary.errors} errors
+                {typeof overview.state.lastSummary.blocked === "number"
+                  ? `, ${overview.state.lastSummary.blocked} blocked`
+                  : ""}
               </p>
             ) : null}
           </div>
@@ -207,6 +211,9 @@ export default function AdminSyncPage() {
                   <div>
                     {log.counts.created} created, {log.counts.updated} updated,{" "}
                     {log.counts.skipped} skipped, {log.counts.errors} errors
+                    {typeof log.counts.blocked === "number"
+                      ? `, ${log.counts.blocked} blocked`
+                      : ""}
                   </div>
                 ) : null}
                 {log.errors?.length ? (

@@ -8,12 +8,36 @@ import { mapItemToProduct, type MappedProduct } from "@/lib/sypram/mapItemToProd
 const COOLDOWN_MS = 30 * 60 * 1000;
 const BATCH_LIMIT = 400;
 
+const SELLABLE_ALLOWLIST = new Set(
+  [
+    "Beer",
+    "Brandy",
+    "Champagne",
+    "COCKTAILS",
+    "Cognac",
+    "Gin",
+    "Liquor",
+    "Rum",
+    "Soda",
+    "Tequila",
+    "Vodka",
+    "Whisky",
+    "Wine",
+    "Wine Cooler",
+  ].map((value) => value.trim().toUpperCase())
+);
+
+const SELLABLE_DENYLIST = new Set(
+  ["Cigar", "Tax", "Uncategorized"].map((value) => value.trim().toUpperCase())
+);
+
 type SyncCounts = {
   fetched: number;
   created: number;
   updated: number;
   skipped: number;
   errors: number;
+  blocked: number;
 };
 
 type SyncSummary = SyncCounts & {
@@ -68,6 +92,23 @@ function getCooldownInfo(lastRunAt?: Date | null) {
   if (diff >= COOLDOWN_MS) return { cooldownActive: false as const };
   const nextAllowedAt = new Date(lastRunAt.getTime() + COOLDOWN_MS);
   return { cooldownActive: true as const, nextAllowedAt };
+}
+
+function normalizeCategoryKey(value: string) {
+  return value.trim().toUpperCase();
+}
+
+function computeSellable(category: string) {
+  const key = normalizeCategoryKey(category);
+  if (SELLABLE_ALLOWLIST.has(key)) {
+    return { isSellableOnline: true, onlineBlockReason: null as string | null };
+  }
+  return {
+    isSellableOnline: false,
+    onlineBlockReason: SELLABLE_DENYLIST.has(key)
+      ? "BLOCKED_CATEGORY"
+      : "BLOCKED_CATEGORY",
+  };
 }
 
 async function getSyncState() {
@@ -144,6 +185,7 @@ export async function syncSypramToFirestore(
     updated: 0,
     skipped: 0,
     errors: 0,
+    blocked: 0,
   };
 
   try {
@@ -180,6 +222,29 @@ export async function syncSypramToFirestore(
           const product = group[index];
           const isCreate = !snap.exists;
           const data = buildWriteData(product, isCreate);
+          const existing = snap.data() as
+            | { isSellableOnline?: boolean; onlineBlockReason?: string }
+            | undefined;
+          const sellable = computeSellable(product.data.category);
+
+          if (isCreate) {
+            data.isSellableOnline = sellable.isSellableOnline;
+            if (!sellable.isSellableOnline && sellable.onlineBlockReason) {
+              data.onlineBlockReason = sellable.onlineBlockReason;
+            }
+            if (!sellable.isSellableOnline) counts.blocked += 1;
+          } else if (typeof existing?.isSellableOnline === "boolean") {
+            if (existing.isSellableOnline === false) counts.blocked += 1;
+          } else {
+            data.isSellableOnline = sellable.isSellableOnline;
+            if (sellable.isSellableOnline) {
+              data.onlineBlockReason = FieldValue.delete();
+            } else if (sellable.onlineBlockReason) {
+              data.onlineBlockReason = sellable.onlineBlockReason;
+              counts.blocked += 1;
+            }
+          }
+
           batch.set(docRefs[index], data, { merge: true });
           if (isCreate) {
             counts.created += 1;
@@ -189,9 +254,18 @@ export async function syncSypramToFirestore(
         });
         await batch.commit();
       } else {
-        snaps.forEach((snap) => {
+        snaps.forEach((snap, index) => {
           if (snap.exists) counts.updated += 1;
           else counts.created += 1;
+          const existing = snap.data() as
+            | { isSellableOnline?: boolean }
+            | undefined;
+          const sellable = computeSellable(group[index].data.category);
+          if (typeof existing?.isSellableOnline === "boolean") {
+            if (existing.isSellableOnline === false) counts.blocked += 1;
+          } else if (!sellable.isSellableOnline) {
+            counts.blocked += 1;
+          }
         });
       }
     }

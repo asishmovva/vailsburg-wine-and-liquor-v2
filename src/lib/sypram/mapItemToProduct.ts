@@ -19,6 +19,7 @@ export type MappedProduct = {
     stock: number;
     inStock: boolean;
     stockNote?: string;
+    groupKey: string;
   };
 };
 
@@ -58,6 +59,13 @@ function normalizeCategory(value: string) {
   return trimmed ? titleCase(trimmed) : "Other";
 }
 
+function buildGroupKey(brand: string, name: string) {
+  const combined = `${brand} ${name}`.trim().toLowerCase();
+  return combined
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
 function getLowerCaseMap(item: SypramItem) {
   const entries = Object.entries(item).map(([key, value]) => [key.toLowerCase(), value]);
   return Object.fromEntries(entries) as Record<string, unknown>;
@@ -77,6 +85,14 @@ export function mapItemToProduct(item: SypramItem): MapResult {
   }
 
   const name = normalizeName(nameRaw);
+  const brand = normalizeString(
+    lowered.brand ??
+      lowered.brandname ??
+      lowered.brand_name ??
+      lowered.vendor ??
+      lowered.vendorname ??
+      lowered.vendor_name
+  );
   const category = normalizeCategory(
     normalizeString(lowered.department ?? lowered.deptname ?? lowered.category)
   );
@@ -106,6 +122,7 @@ export function mapItemToProduct(item: SypramItem): MapResult {
     cost,
     stock,
     inStock: stock > 0,
+    groupKey: buildGroupKey(brand, name),
   };
 
   if (useSale) {

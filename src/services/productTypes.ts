@@ -8,6 +8,7 @@ export type ProductFilters = {
   min?: number;
   max?: number;
   sort?: ProductSort;
+  page?: number;
 };
 
 export type Product = {
@@ -22,10 +23,14 @@ export type Product = {
   createdAt?: number | null;
   size?: string;
   pack?: string;
+  groupKey?: string;
+  isSellableOnline?: boolean;
+  onlineBlockReason?: string;
 };
 
 export type ProductDetail = Product & {
   size: string;
   pack: string;
   upc: string;
+  sku?: string;
 };

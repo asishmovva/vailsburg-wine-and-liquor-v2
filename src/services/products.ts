@@ -61,6 +61,9 @@ export async function queryProducts(filters: ProductFilters) {
   const db = adminDb();
   let query: FirebaseFirestore.Query = db.collection("products");
 
+  // Enforce online sellability server-side.
+  query = query.where("isSellableOnline", "==", true);
+
   const category = normalizeCategory(filters.category);
   if (category) {
     query = query.where("category", "==", category);
@@ -79,6 +82,7 @@ export async function queryProducts(filters: ProductFilters) {
   const min = typeof filters.min === "number" ? filters.min : undefined;
   const max = typeof filters.max === "number" ? filters.max : undefined;
   const sort = normalizeSort(filters.sort);
+  const page = typeof filters.page === "number" && filters.page > 0 ? filters.page : 1;
 
   let appliedSort = sort;
 
@@ -116,6 +120,11 @@ export async function queryProducts(filters: ProductFilters) {
     }
   }
 
+  const offset = (page - 1) * DEFAULT_LIMIT;
+  if (offset > 0) {
+    query = query.offset(offset);
+  }
+
   query = query.limit(DEFAULT_LIMIT);
 
   const snapshot = await query.get();
@@ -130,6 +139,9 @@ export async function queryProducts(filters: ProductFilters) {
       inStock?: boolean;
       size?: string;
       pack?: string;
+      groupKey?: string;
+      isSellableOnline?: boolean;
+      onlineBlockReason?: string;
       createdAt?: FirebaseFirestore.Timestamp | null;
     };
 
@@ -145,6 +157,9 @@ export async function queryProducts(filters: ProductFilters) {
       createdAt: data.createdAt?.toMillis?.() ?? null,
       size: data.size ?? "",
       pack: data.pack ?? "",
+      groupKey: data.groupKey ?? "",
+      isSellableOnline: data.isSellableOnline ?? true,
+      onlineBlockReason: data.onlineBlockReason ?? "",
     };
   });
 

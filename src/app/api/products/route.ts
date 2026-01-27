@@ -20,6 +20,7 @@ export async function GET(request: Request) {
     sort: sort ?? undefined,
     min: parseNumber(searchParams.get("min")),
     max: parseNumber(searchParams.get("max")),
+    page: parseNumber(searchParams.get("page")),
   };
 
   const result = await queryProducts(filters);

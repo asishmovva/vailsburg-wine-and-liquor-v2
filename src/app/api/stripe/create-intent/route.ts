@@ -226,8 +226,15 @@ export async function POST(request: Request) {
         image?: string;
         category?: string;
         taxable?: boolean;
+        isSellableOnline?: boolean;
       };
       const stock = parseNumber(data.stock);
+      if (data.isSellableOnline !== true) {
+        return NextResponse.json(
+          { error: "Some items are not available for online sale." },
+          { status: 400 }
+        );
+      }
       const qty = parseNumber(item.qty);
       if (stock <= 0 || qty <= 0) {
         return NextResponse.json(
