@@ -104,19 +104,6 @@ function writeLocalPrefs(prefs: CheckoutPrefs) {
   window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(prefs));
 }
 
-function getGuestId() {
-  if (typeof window === "undefined") return "guest";
-  const key = "vw_guest_id";
-  const existing = window.localStorage.getItem(key);
-  if (existing) return existing;
-  const id =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `guest_${Date.now()}`;
-  window.localStorage.setItem(key, id);
-  return id;
-}
-
 async function fetchGeocode(query: string, signal?: AbortSignal) {
   const response = await fetch(
     `/api/mapbox/geocode?query=${encodeURIComponent(query)}`,
@@ -479,7 +466,6 @@ export default function CheckoutClient() {
         coords,
         distanceMiles: validation.distanceMiles,
         tipAmount: tipAmount,
-        guestId: user ? undefined : getGuestId(),
         idToken,
       };
 

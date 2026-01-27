@@ -58,11 +58,13 @@ function PaymentForm({
   orderId,
   summary,
   isGuest,
+  email,
 }: {
   clientSecret: string;
   orderId: string;
   summary: OrderSummary | null;
   isGuest: boolean;
+  email?: string | null;
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -87,7 +89,10 @@ function PaymentForm({
     }
 
     const result = await stripe.confirmCardPayment(clientSecret, {
-      payment_method: { card },
+      payment_method: {
+        card,
+        billing_details: email ? { email } : undefined,
+      },
     });
 
     if (result.error) {
@@ -130,6 +135,9 @@ function PaymentForm({
           }}
         />
       </div>
+      <p className="text-xs text-zinc-500">
+        Wallet options appear if supported by your device/browser.
+      </p>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       <Button type="submit" disabled={!stripe || processing} className="w-full">
         {processing ? "Processing..." : "Confirm payment"}
@@ -207,6 +215,7 @@ export default function PaymentClient() {
             orderId={orderId}
             summary={summary}
             isGuest={!user}
+            email={user?.email}
           />
         </Elements>
       </div>

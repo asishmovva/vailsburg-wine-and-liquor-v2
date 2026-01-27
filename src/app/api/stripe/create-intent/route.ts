@@ -32,7 +32,6 @@ type CreateIntentPayload = {
   coords?: { lat: number; lng: number } | null;
   distanceMiles?: number;
   tipAmount?: number;
-  guestId?: string;
   idToken?: string | null;
 };
 
@@ -41,6 +40,8 @@ type OrderItem = {
   name: string;
   price: number;
   qty: number;
+  image: string | null;
+  category: string;
 };
 
 function parseNumber(value: unknown) {
@@ -123,6 +124,19 @@ async function reverseGeocode(coords: { lat: number; lng: number }) {
   };
 }
 
+function formatAddress(address: AddressInput) {
+  const parts = [
+    address.street,
+    address.apt ? `Apt ${address.apt}` : "",
+    address.city,
+    address.state,
+    address.zip,
+  ]
+    .map((part) => part?.toString().trim())
+    .filter(Boolean);
+  return parts.join(", ");
+}
+
 async function calculateStripeTax({
   items,
   deliveryFee,
@@ -177,13 +191,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid fulfillment." }, { status: 400 });
     }
 
-    let userId: string | null = null;
-    if (payload.idToken) {
-      const decoded = await adminAuth().verifyIdToken(payload.idToken);
-      userId = decoded.uid;
+    if (!payload.idToken) {
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
-    const guestId = !userId ? payload.guestId ?? null : null;
+    let userId: string;
+    let email: string | null = null;
+    try {
+      const decoded = await adminAuth().verifyIdToken(payload.idToken);
+      userId = decoded.uid;
+      email = decoded.email ?? null;
+    } catch {
+      return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+    }
 
     const db = adminDb();
     const productsRef = db.collection("products");
@@ -203,13 +223,21 @@ export async function POST(request: Request) {
         name?: string;
         price?: number;
         stock?: number;
+        image?: string;
+        category?: string;
         taxable?: boolean;
       };
       const stock = parseNumber(data.stock);
-      const qty = Math.min(parseNumber(item.qty), stock);
+      const qty = parseNumber(item.qty);
       if (stock <= 0 || qty <= 0) {
         return NextResponse.json(
           { error: "Some items are out of stock." },
+          { status: 400 }
+        );
+      }
+      if (qty > stock) {
+        return NextResponse.json(
+          { error: "Some items exceed available stock." },
           { status: 400 }
         );
       }
@@ -225,6 +253,8 @@ export async function POST(request: Request) {
         name: data.name ?? "Item",
         price,
         qty,
+        image: data.image ?? null,
+        category: data.category ?? "Other",
       });
     }
 
@@ -234,6 +264,9 @@ export async function POST(request: Request) {
     let distanceMiles: number | null = null;
     let deliveryFee = 0;
     let deliveryAddress: AddressInput | null = null;
+    let deliveryInfo:
+      | { address: string; miles: number; eligible: boolean }
+      | null = null;
 
     if (fulfillment === "delivery") {
       const coords = payload.coords;
@@ -271,6 +304,11 @@ export async function POST(request: Request) {
         city: address.city,
         state: address.state,
         zip: address.zip,
+      };
+      deliveryInfo = {
+        address: formatAddress(deliveryAddress),
+        miles: Number(distanceMiles.toFixed(2)),
+        eligible: true,
       };
     }
 
@@ -313,25 +351,27 @@ export async function POST(request: Request) {
       amount: totalCents,
       currency: "usd",
       automatic_payment_methods: { enabled: true },
+      receipt_email: email ?? undefined,
       metadata: {
         orderId,
-        userId: userId ?? "",
-        guestId: guestId ?? "",
+        userId,
         fulfillment,
       },
     });
 
     await orderRef.set({
+      id: orderId,
       orderId,
       userId,
-      guestId,
+      email,
+      guestId: null,
       createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
       status: "payment_pending",
       fulfillment,
-      deliveryAddress: deliveryAddress ?? null,
-      distanceMiles,
+      delivery: deliveryInfo ?? null,
       deliveryFee,
-      tipAmount,
+      tip: tipAmount,
       subtotal,
       taxableSubtotal,
       tax: taxCents / 100,
@@ -354,8 +394,10 @@ export async function POST(request: Request) {
         .set({
           orderId,
           status: "payment_pending",
-          createdAt: FieldValue.serverTimestamp(),
           total: totalCents / 100,
+          fulfillment,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
     }
 
@@ -366,7 +408,7 @@ export async function POST(request: Request) {
         subtotal,
         taxableSubtotal,
         deliveryFee,
-        tipAmount,
+        tip: tipAmount,
         tax: taxCents / 100,
         taxRate,
         taxStrategy,

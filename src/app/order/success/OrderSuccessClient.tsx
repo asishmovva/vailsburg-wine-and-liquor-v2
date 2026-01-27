@@ -3,10 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { doc, getDoc } from "firebase/firestore";
 import { Card } from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
-import { db } from "@/lib/firebase";
 import { OrderDetails, type OrderRecord } from "@/components/orders/OrderDetails";
 import { orderNumberFromId } from "@/utils/order";
 
@@ -113,15 +111,23 @@ export default function OrderSuccessClient() {
   const localSummary = useMemo(() => readLocalSummary(orderId), [orderId]);
 
   const fetchOrder = useCallback(async () => {
-    if (!db || !user || !orderId) return;
+    if (!user || !orderId) return;
     setError(null);
     try {
-      const snap = await getDoc(doc(db, "orders", orderId));
-      if (!snap.exists()) {
+      const token = await user.getIdToken();
+      const response = await fetch(`/api/orders/${orderId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        if (response.status !== 404) {
+          const payload = (await response.json()) as { error?: string };
+          setError(payload.error ?? "Unable to load order.");
+        }
         setOrder(null);
         return;
       }
-      const data = snap.data() as OrderRecord;
+      const payload = (await response.json()) as { order: OrderRecord };
+      const data = payload.order;
       setOrder({
         ...data,
         id: data.id ?? orderId,
@@ -134,24 +140,46 @@ export default function OrderSuccessClient() {
       });
     } catch (err) {
       setError((err as Error).message ?? "Unable to load order.");
-    } finally {
-      // noop
     }
   }, [orderId, user]);
 
   useEffect(() => {
     if (!loading && user && orderId) {
-      void fetchOrder();
+      const timer = setTimeout(() => {
+        void fetchOrder();
+      }, 0);
+      return () => clearTimeout(timer);
     }
+    return undefined;
   }, [fetchOrder, loading, orderId, user]);
 
   useEffect(() => {
     if (!user || !orderId) return;
-    if (order?.status === "payment_pending" || !order) {
-      const timer = setTimeout(() => {
-        void fetchOrder();
-      }, 3000);
-      return () => clearTimeout(timer);
+    let attempts = 0;
+    const maxAttempts = 12;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const poll = async () => {
+      attempts += 1;
+      try {
+        const token = await user.getIdToken();
+        await fetch(`/api/orders/verify?orderId=${encodeURIComponent(orderId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        await fetchOrder();
+      } catch {
+        // ignore polling errors, fallback to next attempt
+      }
+      if (attempts >= maxAttempts && timer) {
+        clearInterval(timer);
+      }
+    };
+
+    if (!order || order.status === "payment_pending") {
+      timer = setInterval(poll, 2500);
+      poll();
+      return () => {
+        if (timer) clearInterval(timer);
+      };
     }
     return undefined;
   }, [order, orderId, user, fetchOrder]);

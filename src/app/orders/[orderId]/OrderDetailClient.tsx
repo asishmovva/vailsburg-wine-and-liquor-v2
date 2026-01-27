@@ -2,10 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { doc, getDoc } from "firebase/firestore";
 import { Card } from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
-import { db } from "@/lib/firebase";
 import { OrderDetails, type OrderRecord } from "@/components/orders/OrderDetails";
 import { orderNumberFromId } from "@/utils/order";
 
@@ -18,17 +16,31 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
   useEffect(() => {
     let active = true;
     const loadOrder = async () => {
-      if (!db || !user || !orderId) return;
+      if (!user || !orderId) return;
       setLoading(true);
       setError(null);
       try {
-        const snap = await getDoc(doc(db, "orders", orderId));
+        const token = await user.getIdToken();
+        const response = await fetch(`/api/orders/${orderId}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        console.log("Order detail fetch", {
+          orderId,
+          status: response.status,
+        });
         if (!active) return;
-        if (!snap.exists()) {
+        if (!response.ok) {
           setOrder(null);
+          if (response.status !== 404) {
+            const payload = (await response.json()) as { error?: string };
+            setError(payload.error ?? "Unable to load order.");
+          }
           return;
         }
-        const data = snap.data() as OrderRecord;
+        const payload = (await response.json()) as { order: OrderRecord };
+        const data = payload.order;
         setOrder({
           ...data,
           id: data.id ?? orderId,
@@ -70,8 +82,14 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
 
   if (!order) {
     return (
-      <Card className="p-6 text-sm text-zinc-600">
-        We could not find this order.
+      <Card className="space-y-3 p-6 text-sm text-zinc-600">
+        <p>Order not found.</p>
+        <Link
+          href="/orders"
+          className="inline-flex h-10 items-center justify-center rounded-full border border-zinc-300 px-4 text-sm font-medium text-zinc-900 hover:border-zinc-400"
+        >
+          Back to orders
+        </Link>
       </Card>
     );
   }

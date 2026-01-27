@@ -4,14 +4,19 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   collection,
-  getDocs,
+  doc,
+  getDoc,
+  onSnapshot,
   orderBy,
   query,
   type Timestamp,
 } from "firebase/firestore";
+import { useRouter } from "next/navigation";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Card } from "@/components/ui/Card";
+import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { db } from "@/lib/firebase";
 import { formatOrderDate, orderNumberFromId } from "@/utils/order";
 
@@ -21,6 +26,15 @@ type OrderPointer = {
   total?: number;
   fulfillment?: "delivery" | "pickup";
   createdAt?: Timestamp;
+};
+
+type OrderItem = {
+  productId: string;
+  name: string;
+  price: number;
+  qty: number;
+  image?: string | null;
+  category?: string;
 };
 
 const STATUS_STYLES: Record<string, string> = {
@@ -43,24 +57,24 @@ function StatusPill({ status }: { status?: string }) {
 
 function OrdersContent() {
   const { user } = useAuth();
+  const router = useRouter();
+  const { addItem } = useCart();
   const [orders, setOrders] = useState<OrderPointer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reorderingId, setReorderingId] = useState<string | null>(null);
 
   useEffect(() => {
-    let active = true;
-    const loadOrders = async () => {
-      if (!db || !user) return;
-      setLoading(true);
-      setError(null);
-      try {
-        const snapshot = await getDocs(
-          query(
-            collection(db, "users", user.uid, "orders"),
-            orderBy("createdAt", "desc")
-          )
-        );
-        if (!active) return;
+    if (!db || !user) return;
+    setLoading(true);
+    setError(null);
+    const q = query(
+      collection(db, "users", user.uid, "orders"),
+      orderBy("createdAt", "desc")
+    );
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
         const data = snapshot.docs.map((docSnap) => {
           const value = docSnap.data() as OrderPointer;
           return {
@@ -69,20 +83,92 @@ function OrdersContent() {
           };
         });
         setOrders(data);
-      } catch (err) {
-        if (active) {
-          setError((err as Error).message ?? "Unable to load orders.");
-        }
-      } finally {
-        if (active) setLoading(false);
+        setLoading(false);
+      },
+      (err) => {
+        setError(err.message ?? "Unable to load orders.");
+        setLoading(false);
       }
-    };
+    );
 
-    void loadOrders();
-    return () => {
-      active = false;
-    };
+    return () => unsubscribe();
   }, [user]);
+
+  const handleReorder = async (orderId: string) => {
+    if (!user || !db || !orderId) return;
+    setReorderingId(orderId);
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(`/api/orders/${orderId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to load order.");
+      }
+
+      const payload = (await response.json()) as {
+        order?: { items?: OrderItem[] };
+      };
+      const items = payload.order?.items ?? [];
+
+      let addedCount = 0;
+      let skippedCount = 0;
+
+      for (const item of items) {
+        const productSnap = await getDoc(doc(db, "products", item.productId));
+        if (!productSnap.exists()) {
+          skippedCount += 1;
+          continue;
+        }
+        const product = productSnap.data() as {
+          name?: string;
+          price?: number;
+          stock?: number;
+          image?: string;
+          category?: string;
+          size?: string;
+          pack?: string;
+        };
+        const stock = Number(product.stock ?? 0);
+        if (stock <= 0) {
+          skippedCount += 1;
+          continue;
+        }
+        const qty = Math.min(Number(item.qty ?? 1), stock);
+        const result = addItem({
+          productId: item.productId,
+          qty,
+          price: Number(product.price ?? item.price ?? 0),
+          name: String(product.name ?? item.name ?? "Item"),
+          image: String(product.image ?? item.image ?? ""),
+          category: String(product.category ?? item.category ?? ""),
+          size: String(product.size ?? ""),
+          pack: String(product.pack ?? ""),
+          stock,
+        });
+
+        if (result === "added") {
+          addedCount += 1;
+        }
+      }
+
+      if (skippedCount > 0) {
+        toast.error(`${skippedCount} items were out of stock and skipped.`);
+      }
+
+      if (addedCount > 0) {
+        toast.success(`Added ${addedCount} items to cart`);
+        router.push("/cart");
+      } else if (skippedCount === 0) {
+        toast.error("Could not add items. Try again.");
+      }
+    } catch (err) {
+      toast.error((err as Error).message ?? "Could not reorder. Try again.");
+    } finally {
+      setReorderingId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -154,12 +240,14 @@ function OrdersContent() {
             >
               View details
             </Link>
-            <Link
-              href="/shop"
-              className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-medium text-zinc-900 hover:border-zinc-400"
+            <button
+              type="button"
+              onClick={() => handleReorder(order.orderId)}
+              disabled={reorderingId === order.orderId}
+              className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-medium text-zinc-900 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Reorder
-            </Link>
+              {reorderingId === order.orderId ? "Reordering..." : "Reorder"}
+            </button>
           </div>
         </Card>
       ))}
