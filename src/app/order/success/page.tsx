@@ -2,14 +2,8 @@ import { Suspense } from "react";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import OrderSuccessClient from "./OrderSuccessClient";
 
-export default function OrderSuccessPage({
-  searchParams,
-}: {
-  searchParams?: { orderId?: string };
-}) {
-  const next = searchParams?.orderId
-    ? `/order/success?orderId=${encodeURIComponent(searchParams.orderId)}`
-    : "/order/success";
+export default function OrderSuccessPage() {
+  const next = "/order/success";
   return (
     <RequireAuth redirectTo={next}>
       <Suspense

@@ -119,7 +119,9 @@ export default function OrderSuccessClient() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) {
-        if (response.status !== 404) {
+        if (response.status === 403 || response.status === 404) {
+          setError("Order not found or not allowed.");
+        } else {
           const payload = (await response.json()) as { error?: string };
           setError(payload.error ?? "Unable to load order.");
         }
@@ -202,7 +204,7 @@ export default function OrderSuccessClient() {
     if (error) {
       return (
         <Card className="p-6 text-sm text-red-600">
-          Unable to load your order. {error}
+          {error}
         </Card>
       );
     }
