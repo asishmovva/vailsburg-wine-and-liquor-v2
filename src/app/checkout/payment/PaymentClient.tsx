@@ -88,10 +88,14 @@ function PaymentForm({
       return;
     }
 
+    const billingDetails = email
+      ? { email, name: email }
+      : undefined;
+
     const result = await stripe.confirmCardPayment(clientSecret, {
       payment_method: {
         card,
-        billing_details: email ? { email } : undefined,
+        billing_details: billingDetails,
       },
     });
 

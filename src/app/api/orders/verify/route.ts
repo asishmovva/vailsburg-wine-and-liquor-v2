@@ -96,21 +96,27 @@ export async function GET(request: Request) {
   let inventoryWarning = false;
 
   await db.runTransaction(async (transaction) => {
-    for (const item of items) {
-      const productRef = db.collection("products").doc(item.productId);
-      const productSnap = await transaction.get(productRef);
-      if (!productSnap.exists) continue;
+    const productRefs = items.map((item) =>
+      db.collection("products").doc(item.productId)
+    );
+    const productSnaps = productRefs.length
+      ? await transaction.getAll(...productRefs)
+      : [];
+
+    productSnaps.forEach((productSnap, index) => {
+      if (!productSnap.exists) return;
+      const item = items[index];
       const data = productSnap.data() as { stock?: number };
       const currentStock = Number(data.stock ?? 0);
       const updatedStock = Math.max(currentStock - item.qty, 0);
       if (currentStock - item.qty < 0) inventoryWarning = true;
 
-      transaction.update(productRef, {
+      transaction.update(productSnap.ref, {
         stock: updatedStock,
         inStock: updatedStock > 0,
         updatedAt: FieldValue.serverTimestamp(),
       });
-    }
+    });
 
     transaction.update(orderRef, {
       status: "paid",
