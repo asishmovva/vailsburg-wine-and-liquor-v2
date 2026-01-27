@@ -43,3 +43,32 @@ pnpm ts-node scripts/backfillNameLower.ts --dry-run
 ```bash
 pnpm ts-node scripts/backfillNameLower.ts
 ```
+
+## Sypram catalog sync (Phase 9)
+
+Sync Sypram item list into Firestore products. Cooldown enforced (30 minutes).
+
+Required env vars (in `.env.local`):
+
+- `SYPRAM_BASE_URL=https://DataServices.sypramsoftware.com`
+- `SYPRAM_USERID=...`
+- `SYPRAM_PASSWORD=...`
+- `SYPRAM_PIN=...`
+
+Dry run:
+
+```bash
+pnpm ts-node scripts/syncSypramToFirestore.ts --dry-run
+```
+
+Limit for testing:
+
+```bash
+pnpm ts-node scripts/syncSypramToFirestore.ts --limit=50
+```
+
+Commit sync:
+
+```bash
+pnpm ts-node scripts/syncSypramToFirestore.ts
+```
