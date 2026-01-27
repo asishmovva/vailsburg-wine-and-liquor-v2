@@ -26,6 +26,7 @@ type SyncLog = {
   dryRun: boolean;
   counts: SyncCounts | null;
   finishedAt: string | null;
+  errors?: string[] | null;
 };
 
 type SyncOverview = {
@@ -108,9 +109,16 @@ export default function AdminSyncPage() {
             setMessage(payload?.error ?? "Sync failed.");
           }
         } else {
-          setMessage(
-            dryRun ? "Dry sync completed. Review logs below." : "Sync completed."
-          );
+          if (payload?.errors?.length) {
+            const first = payload.errors[0];
+            setMessage(
+              `${dryRun ? "Dry sync" : "Sync"} completed with errors: ${first}`
+            );
+          } else {
+            setMessage(
+              dryRun ? "Dry sync completed. Review logs below." : "Sync completed."
+            );
+          }
         }
       } catch (error) {
         setMessage((error as Error).message ?? "Sync failed.");
@@ -199,6 +207,13 @@ export default function AdminSyncPage() {
                   <div>
                     {log.counts.created} created, {log.counts.updated} updated,{" "}
                     {log.counts.skipped} skipped, {log.counts.errors} errors
+                  </div>
+                ) : null}
+                {log.errors?.length ? (
+                  <div className="text-xs text-rose-600">
+                    {log.errors.slice(0, 2).map((err) => (
+                      <p key={err}>{err}</p>
+                    ))}
                   </div>
                 ) : null}
               </div>

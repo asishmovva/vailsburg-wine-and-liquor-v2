@@ -257,6 +257,7 @@ export async function getSypramSyncOverview() {
         dryRun?: boolean;
         counts?: SyncCounts;
         finishedAt?: FirebaseFirestore.Timestamp | null;
+        errors?: string[];
       };
       return {
         id,
@@ -265,6 +266,7 @@ export async function getSypramSyncOverview() {
         dryRun: Boolean(payload.dryRun),
         counts: payload.counts ?? null,
         finishedAt: payload.finishedAt?.toDate?.().toISOString() ?? null,
+        errors: payload.errors ?? null,
       };
     });
 
