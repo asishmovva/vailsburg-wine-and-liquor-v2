@@ -26,6 +26,15 @@ export default function CartClient() {
     const parsed = Number.parseInt(next, 10);
     if (Number.isNaN(parsed)) return;
 
+    if (parsed <= 0) {
+      setOverLimit((prev) => {
+        const next = { ...prev };
+        delete next[productId];
+        return next;
+      });
+      return;
+    }
+
     if (parsed > stock) {
       setOverLimit((prev) => ({ ...prev, [productId]: stock }));
     } else {
@@ -36,7 +45,7 @@ export default function CartClient() {
       });
     }
 
-    const clamped = Math.max(1, Math.min(parsed, stock));
+    const clamped = Math.min(parsed, stock);
     updateQty(productId, clamped, stock);
   };
 
@@ -48,7 +57,16 @@ export default function CartClient() {
     }
     const parsed = Number.parseInt(draft, 10);
     if (Number.isNaN(parsed)) return;
-    const clamped = Math.max(1, Math.min(parsed, stock));
+    if (parsed <= 0) {
+      removeItem(productId);
+      setQtyDrafts((prev) => {
+        const next = { ...prev };
+        delete next[productId];
+        return next;
+      });
+      return;
+    }
+    const clamped = Math.min(parsed, stock);
     updateQty(productId, clamped, stock);
     setQtyDrafts((prev) => ({ ...prev, [productId]: String(clamped) }));
   };
@@ -143,7 +161,7 @@ export default function CartClient() {
                     type="button"
                     className="h-9 w-9 rounded-full border border-zinc-200 text-lg text-zinc-700"
                     onClick={() => updateQty(item.productId, item.qty - 1, item.stock)}
-                    disabled={item.qty <= 1}
+                    disabled={item.qty <= 0}
                     aria-label="Decrease quantity"
                   >
                     -
