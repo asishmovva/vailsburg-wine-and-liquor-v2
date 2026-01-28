@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { SypramItem } from "@/lib/sypram/types";
+import { normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
 
 export type MappedProduct = {
   id: string;
@@ -19,6 +20,7 @@ export type MappedProduct = {
     stock: number;
     inStock: boolean;
     stockNote?: string;
+    groupKey: string;
   };
 };
 
@@ -36,26 +38,23 @@ function parseNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function titleCase(value: string) {
-  return value
-    .toLowerCase()
-    .split(/\s+/)
-    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : ""))
-    .join(" ")
-    .trim();
-}
-
 function normalizeName(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizeNameKey(value: string) {
+  return normalizeName(value).toUpperCase();
 }
 
 function normalizePack(value: string) {
   return value ? value.trim() : "Single";
 }
 
-function normalizeCategory(value: string) {
-  const trimmed = value.trim();
-  return trimmed ? titleCase(trimmed) : "Other";
+function buildGroupKey(name: string, categoryKey: string, upc: string) {
+  if (upc) {
+    return `UPC:${upc}`;
+  }
+  return `NAME:${normalizeNameKey(name)}|CAT:${categoryKey}`;
 }
 
 function getLowerCaseMap(item: SypramItem) {
@@ -77,9 +76,10 @@ export function mapItemToProduct(item: SypramItem): MapResult {
   }
 
   const name = normalizeName(nameRaw);
-  const category = normalizeCategory(
-    normalizeString(lowered.department ?? lowered.deptname ?? lowered.category)
+  const categoryInput = normalizeString(
+    lowered.department ?? lowered.deptname ?? lowered.category
   );
+  const { key: categoryKey, label: categoryLabel } = normalizeCategory(categoryInput);
   const size = normalizeString(lowered.sizename ?? lowered.size);
   const pack = normalizePack(normalizeString(lowered.packname ?? lowered.pack));
   const upc = normalizeString(lowered.upc ?? lowered.barcode);
@@ -99,13 +99,14 @@ export function mapItemToProduct(item: SypramItem): MapResult {
     upc,
     name,
     nameLower: name.toLowerCase(),
-    category,
+    category: categoryLabel,
     size,
     pack,
     price,
     cost,
     stock,
     inStock: stock > 0,
+    groupKey: buildGroupKey(name, categoryKey, upc),
   };
 
   if (useSale) {

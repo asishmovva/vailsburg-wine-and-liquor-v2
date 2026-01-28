@@ -283,9 +283,18 @@ export default function CheckoutClient() {
           });
         }
       } else if (localPrefsRef.current) {
-        await setDoc(ref, {
+        const payload = {
           ...localPrefsRef.current,
           updatedAt: serverTimestamp(),
+        } as Record<string, unknown>;
+        if (payload.coords === undefined) {
+          delete payload.coords;
+        }
+        if (payload.distanceMiles === undefined) {
+          delete payload.distanceMiles;
+        }
+        await setDoc(ref, {
+          ...payload,
         });
       }
       setPrefsReady(true);
@@ -300,23 +309,27 @@ export default function CheckoutClient() {
 
   useEffect(() => {
     if (!prefsReady) return;
-    const prefs: CheckoutPrefs = {
+    const prefsBase: CheckoutPrefs = {
       fulfillmentType: fulfillment,
       address,
-      coords: coords ?? undefined,
-      distanceMiles: validation.distanceMiles,
     };
+    if (typeof validation.distanceMiles === "number") {
+      prefsBase.distanceMiles = validation.distanceMiles;
+    }
+    if (coords) {
+      prefsBase.coords = coords;
+    }
 
     if (persistTimer.current) clearTimeout(persistTimer.current);
     persistTimer.current = setTimeout(async () => {
       if (user && db) {
         const ref = doc(db, "users", user.uid, "checkoutPrefs", "default");
         await setDoc(ref, {
-          ...prefs,
+          ...prefsBase,
           updatedAt: serverTimestamp(),
         });
       } else {
-        writeLocalPrefs(prefs);
+        writeLocalPrefs(prefsBase);
       }
     }, 500);
   }, [prefsReady, fulfillment, address, coords, validation.distanceMiles, user]);

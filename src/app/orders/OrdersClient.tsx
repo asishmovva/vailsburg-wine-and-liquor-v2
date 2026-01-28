@@ -2,15 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  collection,
-  doc,
-  getDoc,
-  onSnapshot,
-  orderBy,
-  query,
-  type Timestamp,
-} from "firebase/firestore";
+import { collection, onSnapshot, orderBy, query, type Timestamp } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { Card } from "@/components/ui/Card";
@@ -114,14 +106,22 @@ function OrdersContent() {
 
       let addedCount = 0;
       let skippedCount = 0;
+      let blockedCount = 0;
 
-      for (const item of items) {
-        const productSnap = await getDoc(doc(db, "products", item.productId));
-        if (!productSnap.exists()) {
-          skippedCount += 1;
-          continue;
-        }
-        const product = productSnap.data() as {
+      const ids = items.map((item) => item.productId);
+      const productsResponse = await fetch("/api/products/by-ids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+
+      if (!productsResponse.ok) {
+        throw new Error("Unable to load products.");
+      }
+
+      const productsPayload = (await productsResponse.json()) as {
+        items?: Array<{
+          id: string;
           name?: string;
           price?: number;
           stock?: number;
@@ -129,7 +129,19 @@ function OrdersContent() {
           category?: string;
           size?: string;
           pack?: string;
-        };
+        }>;
+      };
+
+      const productMap = new Map(
+        (productsPayload.items ?? []).map((product) => [product.id, product])
+      );
+
+      for (const item of items) {
+        const product = productMap.get(item.productId);
+        if (!product) {
+          blockedCount += 1;
+          continue;
+        }
         const stock = Number(product.stock ?? 0);
         if (stock <= 0) {
           skippedCount += 1;
@@ -151,6 +163,10 @@ function OrdersContent() {
         if (result === "added") {
           addedCount += 1;
         }
+      }
+
+      if (blockedCount > 0) {
+        toast.error(`${blockedCount} items are not available online and were skipped.`);
       }
 
       if (skippedCount > 0) {
