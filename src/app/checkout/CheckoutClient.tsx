@@ -290,6 +290,9 @@ export default function CheckoutClient() {
         if (payload.coords === undefined) {
           delete payload.coords;
         }
+        if (payload.distanceMiles === undefined) {
+          delete payload.distanceMiles;
+        }
         await setDoc(ref, {
           ...payload,
         });
@@ -309,8 +312,10 @@ export default function CheckoutClient() {
     const prefsBase: CheckoutPrefs = {
       fulfillmentType: fulfillment,
       address,
-      distanceMiles: validation.distanceMiles,
     };
+    if (typeof validation.distanceMiles === "number") {
+      prefsBase.distanceMiles = validation.distanceMiles;
+    }
     if (coords) {
       prefsBase.coords = coords;
     }
