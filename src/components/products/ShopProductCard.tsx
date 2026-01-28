@@ -63,6 +63,9 @@ export function ShopProductCard({
   onAddToCart?: (product: Product) => void;
 }) {
   const placeholder = getPlaceholder(product.category);
+  const sizeLabel = product.size?.trim();
+  const packLabel = product.pack?.trim();
+  const metaLabel = [sizeLabel, packLabel].filter(Boolean).join(" • ");
 
   return (
     <Card className="group flex h-full flex-col gap-3 border border-zinc-200">
@@ -109,6 +112,9 @@ export function ShopProductCard({
           <p className="text-sm font-semibold text-zinc-900">
             {product.name}
           </p>
+          {metaLabel ? (
+            <p className="text-xs text-zinc-500">{metaLabel}</p>
+          ) : null}
           <p className="text-sm text-zinc-600">
             ${product.price.toFixed(2)}
           </p>

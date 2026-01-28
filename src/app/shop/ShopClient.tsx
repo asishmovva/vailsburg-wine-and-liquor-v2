@@ -35,6 +35,8 @@ type FilterState = {
   q: string;
   category: string;
   sub: string;
+  size: string;
+  pack: string;
   inStock: boolean;
   sort: ProductSort;
   min?: number;
@@ -57,6 +59,8 @@ function parseFilters(params: URLSearchParams): FilterState {
     q: params.get("q") ?? "",
     category: params.get("category")?.toUpperCase() ?? "",
     sub: params.get("sub")?.toUpperCase() ?? "",
+    size: params.get("size") ?? "",
+    pack: params.get("pack") ?? "",
     inStock: params.get("inStock") === "1",
     sort,
     min: parseNumber(params.get("min")),
@@ -70,6 +74,62 @@ function formatCategoryLabel(value: string) {
     .split(/\s+/)
     .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : ""))
     .join(" ");
+}
+
+function normalizeFacetValue(value: string) {
+  return value.trim();
+}
+
+function parseSizeValue(value: string) {
+  const trimmed = value.trim();
+  const match = trimmed.match(/(\d+(?:\.\d+)?)/);
+  const number = match ? Number.parseFloat(match[1]) : Number.NaN;
+  const unit = trimmed.replace(/[^a-zA-Z]+/g, "").toLowerCase();
+  if (!Number.isFinite(number)) return Number.NaN;
+  if (unit === "l" || unit === "lt" || unit === "ltr") return number * 1000;
+  if (unit === "oz" || unit === "floz") return number * 29.5735;
+  return number;
+}
+
+function sortSizes(values: string[]) {
+  const normalized = values
+    .map((value) => normalizeFacetValue(value))
+    .filter(Boolean);
+
+  return normalized.sort((a, b) => {
+    const aValue = parseSizeValue(a);
+    const bValue = parseSizeValue(b);
+    if (Number.isFinite(aValue) && Number.isFinite(bValue)) {
+      return aValue - bValue;
+    }
+    if (Number.isFinite(aValue)) return -1;
+    if (Number.isFinite(bValue)) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function sortPacks(values: string[]) {
+  const normalized = values
+    .map((value) => normalizeFacetValue(value))
+    .filter(Boolean);
+
+  return normalized.sort((a, b) => {
+    const aLower = a.toLowerCase();
+    const bLower = b.toLowerCase();
+    const aIsSingle = aLower.includes("single");
+    const bIsSingle = bLower.includes("single");
+    if (aIsSingle && !bIsSingle) return -1;
+    if (!aIsSingle && bIsSingle) return 1;
+
+    const aNumber = Number.parseFloat(aLower.match(/\d+(?:\.\d+)?/)?.[0] ?? "");
+    const bNumber = Number.parseFloat(bLower.match(/\d+(?:\.\d+)?/)?.[0] ?? "");
+    if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) {
+      return aNumber - bNumber;
+    }
+    if (Number.isFinite(aNumber)) return -1;
+    if (Number.isFinite(bNumber)) return 1;
+    return a.localeCompare(b);
+  });
 }
 
 export default function ShopClient() {
@@ -89,6 +149,9 @@ export default function ShopClient() {
     new Set()
   );
   const [resultCount, setResultCount] = useState(0);
+  const [facetSizes, setFacetSizes] = useState<string[]>([]);
+  const [facetPacks, setFacetPacks] = useState<string[]>([]);
+  const [facetError, setFacetError] = useState<string | null>(null);
 
   const filters = useMemo(
     () => parseFilters(new URLSearchParams(searchParams.toString())),
@@ -112,6 +175,12 @@ export default function ShopClient() {
 
       const sub = merged.sub.trim().toUpperCase();
       if (sub) params.set("sub", sub);
+
+      const size = merged.size.trim();
+      if (size) params.set("size", size);
+
+      const pack = merged.pack.trim();
+      if (pack) params.set("pack", pack);
 
       if (merged.inStock) params.set("inStock", "1");
 
@@ -164,6 +233,34 @@ export default function ShopClient() {
   }, [searchKey]);
 
   useEffect(() => {
+    let active = true;
+    setFacetError(null);
+
+    fetch("/api/catalog/facets")
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error("Unable to load facets.");
+        }
+        return res.json() as Promise<{ sizes: string[]; packs: string[] }>;
+      })
+      .then((data) => {
+        if (!active) return;
+        setFacetSizes(Array.isArray(data.sizes) ? data.sizes : []);
+        setFacetPacks(Array.isArray(data.packs) ? data.packs : []);
+      })
+      .catch((err: Error) => {
+        if (!active) return;
+        setFacetSizes([]);
+        setFacetPacks([]);
+        setFacetError(err.message);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!user) {
       setFavorites(new Set());
       return;
@@ -197,11 +294,38 @@ export default function ShopClient() {
     filters.q ||
       filters.category ||
       filters.sub ||
+      filters.size ||
+      filters.pack ||
       filters.inStock ||
       typeof filters.min === "number" ||
       typeof filters.max === "number" ||
       filters.sort !== "az"
   );
+
+  const filteredProducts = useMemo(() => {
+    let items = products;
+    const sizeFilter = normalizeFacetValue(filters.size).toLowerCase();
+    const packFilter = normalizeFacetValue(filters.pack).toLowerCase();
+
+    if (sizeFilter) {
+      items = items.filter(
+        (item) =>
+          normalizeFacetValue(item.size ?? "").toLowerCase() === sizeFilter
+      );
+    }
+
+    if (packFilter) {
+      items = items.filter(
+        (item) =>
+          normalizeFacetValue(item.pack ?? "").toLowerCase() === packFilter
+      );
+    }
+
+    return items;
+  }, [products, filters.pack, filters.size]);
+
+  const displayedCount =
+    filters.size || filters.pack ? filteredProducts.length : resultCount;
 
   const handleFavoriteToggle = async (productId: string) => {
     if (!user) {
@@ -292,7 +416,7 @@ export default function ShopClient() {
               Filters
             </Button>
             <span className="text-sm text-zinc-500">
-              {loading ? "Loading..." : `${resultCount} items`}
+              {loading ? "Loading..." : `${displayedCount} items`}
             </span>
           </div>
         </div>
@@ -306,7 +430,7 @@ export default function ShopClient() {
 
       {loading ? (
         <ProductGridSkeleton />
-      ) : products.length === 0 ? (
+      ) : filteredProducts.length === 0 ? (
         <Card className="space-y-4 py-12 text-center">
           <p className="text-sm text-zinc-600">
             {hasActiveFilters
@@ -319,7 +443,7 @@ export default function ShopClient() {
         </Card>
       ) : (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
-          {products.map((product) => (
+          {filteredProducts.map((product) => (
             <ShopProductCard
               key={product.id}
               product={product}
@@ -343,6 +467,9 @@ export default function ShopClient() {
           setFiltersOpen(false);
         }}
         subcategories={subcategoryOptions}
+        sizes={sortSizes(facetSizes)}
+        packs={sortPacks(facetPacks)}
+        facetError={facetError}
       />
     </div>
   );
@@ -356,6 +483,9 @@ function FiltersPanel({
   onClear,
   onApply,
   subcategories,
+  sizes,
+  packs,
+  facetError,
 }: {
   open: boolean;
   onClose: () => void;
@@ -364,6 +494,9 @@ function FiltersPanel({
   onUpdate: (updates: Partial<FilterState>) => void;
   filters: FilterState;
   subcategories: { value: string; label: string }[];
+  sizes: string[];
+  packs: string[];
+  facetError: string | null;
 }) {
   return (
     <div
@@ -392,13 +525,16 @@ function FiltersPanel({
           onClear={onClear}
           onApply={onApply}
           subcategories={subcategories}
+          sizes={sizes}
+          packs={packs}
+          facetError={facetError}
         />
       </div>
 
       <div
-        className={`fixed bottom-0 left-0 right-0 flex max-h-[85vh] flex-col rounded-t-3xl border-t border-zinc-200 bg-white p-6 shadow-xl transition-transform lg:hidden ${
+        className={`fixed bottom-0 left-0 right-0 flex h-[85dvh] flex-col rounded-t-3xl border-t border-zinc-200 bg-white p-6 shadow-xl transition-transform lg:hidden ${
           open ? "translate-y-0" : "translate-y-full"
-        }`}
+        } overflow-hidden`}
       >
         <FiltersContent
           filters={filters}
@@ -406,6 +542,9 @@ function FiltersPanel({
           onClear={onClear}
           onApply={onApply}
           subcategories={subcategories}
+          sizes={sizes}
+          packs={packs}
+          facetError={facetError}
         />
       </div>
     </div>
@@ -418,12 +557,18 @@ function FiltersContent({
   onClear,
   onApply,
   subcategories,
+  sizes,
+  packs,
+  facetError,
 }: {
   filters: FilterState;
   onUpdate: (updates: Partial<FilterState>) => void;
   onClear: () => void;
   onApply: () => void;
   subcategories: { value: string; label: string }[];
+  sizes: string[];
+  packs: string[];
+  facetError: string | null;
 }) {
   const handleMinChange = (value: string) => {
     if (!value) {
@@ -444,7 +589,7 @@ function FiltersContent({
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-zinc-900">Filters</h2>
         <button
@@ -513,6 +658,68 @@ function FiltersContent({
               </button>
             ))}
           </div>
+        </div>
+
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-zinc-900">Size</h3>
+          {facetError ? (
+            <p className="text-xs text-zinc-500">Sizes unavailable.</p>
+          ) : sizes.length === 0 ? (
+            <p className="text-xs text-zinc-500">No sizes available yet.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {sizes.map((size) => {
+                const isActive = filters.size === size;
+                return (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() =>
+                      onUpdate({ size: isActive ? "" : size })
+                    }
+                    className={`rounded-full border px-3 py-2 text-xs font-medium transition ${
+                      isActive
+                        ? "border-zinc-900 bg-zinc-900 text-white"
+                        : "border-zinc-200 text-zinc-700"
+                    }`}
+                  >
+                    {size}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-3">
+          <h3 className="text-sm font-semibold text-zinc-900">Pack</h3>
+          {facetError ? (
+            <p className="text-xs text-zinc-500">Packs unavailable.</p>
+          ) : packs.length === 0 ? (
+            <p className="text-xs text-zinc-500">No packs available yet.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {packs.map((pack) => {
+                const isActive = filters.pack === pack;
+                return (
+                  <button
+                    key={pack}
+                    type="button"
+                    onClick={() =>
+                      onUpdate({ pack: isActive ? "" : pack })
+                    }
+                    className={`rounded-full border px-3 py-2 text-xs font-medium transition ${
+                      isActive
+                        ? "border-zinc-900 bg-zinc-900 text-white"
+                        : "border-zinc-200 text-zinc-700"
+                    }`}
+                  >
+                    {pack}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="space-y-3">
