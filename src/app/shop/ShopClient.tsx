@@ -302,6 +302,31 @@ export default function ShopClient() {
       filters.sort !== "az"
   );
 
+  const filteredProducts = useMemo(() => {
+    let items = products;
+    const sizeFilter = normalizeFacetValue(filters.size).toLowerCase();
+    const packFilter = normalizeFacetValue(filters.pack).toLowerCase();
+
+    if (sizeFilter) {
+      items = items.filter(
+        (item) =>
+          normalizeFacetValue(item.size ?? "").toLowerCase() === sizeFilter
+      );
+    }
+
+    if (packFilter) {
+      items = items.filter(
+        (item) =>
+          normalizeFacetValue(item.pack ?? "").toLowerCase() === packFilter
+      );
+    }
+
+    return items;
+  }, [products, filters.pack, filters.size]);
+
+  const displayedCount =
+    filters.size || filters.pack ? filteredProducts.length : resultCount;
+
   const handleFavoriteToggle = async (productId: string) => {
     if (!user) {
       const currentQuery = searchParams.toString();
@@ -391,7 +416,7 @@ export default function ShopClient() {
               Filters
             </Button>
             <span className="text-sm text-zinc-500">
-              {loading ? "Loading..." : `${resultCount} items`}
+              {loading ? "Loading..." : `${displayedCount} items`}
             </span>
           </div>
         </div>
@@ -405,7 +430,7 @@ export default function ShopClient() {
 
       {loading ? (
         <ProductGridSkeleton />
-      ) : products.length === 0 ? (
+      ) : filteredProducts.length === 0 ? (
         <Card className="space-y-4 py-12 text-center">
           <p className="text-sm text-zinc-600">
             {hasActiveFilters
@@ -418,7 +443,7 @@ export default function ShopClient() {
         </Card>
       ) : (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
-          {products.map((product) => (
+          {filteredProducts.map((product) => (
             <ShopProductCard
               key={product.id}
               product={product}
