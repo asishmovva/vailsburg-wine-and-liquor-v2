@@ -7,6 +7,7 @@ export const ONLINE_ALLOWLIST = [
   "Gin",
   "Liquor",
   "Rum",
+  "Snacks",
   "Soda",
   "Tequila",
   "Vodka",
@@ -15,7 +16,13 @@ export const ONLINE_ALLOWLIST = [
   "Wine Cooler",
 ];
 
-export const ONLINE_DENYLIST = ["Cigar", "Tax", "Uncategorized"];
+export const ONLINE_DENYLIST = [
+  "Cigar",
+  "Mixer",
+  "Tax",
+  "Uncategorized",
+  "Water",
+];
 
 const ALLOW_KEYS = new Set(
   ONLINE_ALLOWLIST.map((value) => value.trim().toUpperCase())
@@ -33,6 +40,7 @@ const CANONICAL_LABELS: Record<string, string> = {
   GIN: "Gin",
   LIQUOR: "Liquor",
   RUM: "Rum",
+  SNACKS: "Snacks",
   SODA: "Soda",
   TEQUILA: "Tequila",
   VODKA: "Vodka",
@@ -40,8 +48,10 @@ const CANONICAL_LABELS: Record<string, string> = {
   WINE: "Wine",
   "WINE COOLER": "Wine Cooler",
   CIGAR: "Cigar",
+  MIXER: "Mixer",
   TAX: "Tax",
   UNCATEGORIZED: "Uncategorized",
+  WATER: "Water",
 };
 
 function collapseSpaces(value: string) {
@@ -73,6 +83,10 @@ export function normalizeCategory(input?: string | null) {
 
   if (normalized === "WHISKEY" || normalized === "WHISKEYS") {
     normalized = "WHISKY";
+  }
+
+  if (normalized === "MIXERS") {
+    normalized = "MIXER";
   }
 
   if (normalized === "UNCATEGORIZED" || normalized === "UN-CATEGORIZED") {
