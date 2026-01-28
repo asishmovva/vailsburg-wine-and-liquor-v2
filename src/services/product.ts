@@ -18,8 +18,16 @@ export async function getProductById(id: string): Promise<ProductDetail | null> 
     size?: string;
     pack?: string;
     upc?: string;
+    sku?: string;
+    groupKey?: string;
+    isSellableOnline?: boolean;
+    onlineBlockReason?: string;
     createdAt?: FirebaseFirestore.Timestamp | null;
   };
+
+  if (data.isSellableOnline !== true) {
+    return null;
+  }
 
   return {
     id: snapshot.id,
@@ -34,6 +42,10 @@ export async function getProductById(id: string): Promise<ProductDetail | null> 
     size: data.size ?? "",
     pack: data.pack ?? "",
     upc: data.upc ?? "",
+    sku: data.sku ?? "",
+    groupKey: data.groupKey ?? "",
+    isSellableOnline: data.isSellableOnline ?? false,
+    onlineBlockReason: data.onlineBlockReason ?? "",
     createdAt: data.createdAt?.toMillis?.() ?? null,
   };
 }

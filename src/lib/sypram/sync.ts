@@ -2,6 +2,7 @@ import "server-only";
 
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { getSellability, normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
 import { fetchSypramItems } from "@/lib/sypram/client";
 import { mapItemToProduct, type MappedProduct } from "@/lib/sypram/mapItemToProduct";
 
@@ -14,12 +15,15 @@ type SyncCounts = {
   updated: number;
   skipped: number;
   errors: number;
+  blockedCount: number;
+  sellableCount: number;
 };
 
 type SyncSummary = SyncCounts & {
   runId: string;
   dryRun: boolean;
   durationMs: number;
+  blockedByCategory: Record<string, number>;
 };
 
 type SyncState = {
@@ -68,6 +72,11 @@ function getCooldownInfo(lastRunAt?: Date | null) {
   if (diff >= COOLDOWN_MS) return { cooldownActive: false as const };
   const nextAllowedAt = new Date(lastRunAt.getTime() + COOLDOWN_MS);
   return { cooldownActive: true as const, nextAllowedAt };
+}
+
+function normalizeFacetValue(value?: string) {
+  if (!value) return "";
+  return value.replace(/\s+/g, " ").trim();
 }
 
 async function getSyncState() {
@@ -144,7 +153,12 @@ export async function syncSypramToFirestore(
     updated: 0,
     skipped: 0,
     errors: 0,
+    blockedCount: 0,
+    sellableCount: 0,
   };
+  const blockedByCategory: Record<string, number> = {};
+  const facetSizes = new Set<string>();
+  const facetPacks = new Set<string>();
 
   try {
     const items = await fetchSypramItems();
@@ -180,6 +194,41 @@ export async function syncSypramToFirestore(
           const product = group[index];
           const isCreate = !snap.exists;
           const data = buildWriteData(product, isCreate);
+          const existing = snap.data() as
+            | {
+                onlineBlockReason?: string;
+                isSellableOnline?: boolean;
+              }
+            | undefined;
+
+          const { key: categoryKey } = normalizeCategory(product.data.category);
+          const sellability = getSellability(product.data.category);
+          const manualBlock =
+            typeof existing?.onlineBlockReason === "string" &&
+            existing.onlineBlockReason.startsWith("MANUAL_");
+
+          if (manualBlock) {
+            data.isSellableOnline = false;
+            data.onlineBlockReason = existing?.onlineBlockReason;
+            counts.blockedCount += 1;
+            blockedByCategory[categoryKey] =
+              (blockedByCategory[categoryKey] ?? 0) + 1;
+          } else {
+            data.isSellableOnline = sellability.isSellableOnline;
+            if (sellability.isSellableOnline) {
+              data.onlineBlockReason = FieldValue.delete();
+              counts.sellableCount += 1;
+              const sizeValue = normalizeFacetValue(product.data.size);
+              const packValue = normalizeFacetValue(product.data.pack);
+              if (sizeValue) facetSizes.add(sizeValue);
+              if (packValue) facetPacks.add(packValue);
+            } else {
+              data.onlineBlockReason = sellability.onlineBlockReason;
+              counts.blockedCount += 1;
+              blockedByCategory[categoryKey] =
+                (blockedByCategory[categoryKey] ?? 0) + 1;
+            }
+          }
           batch.set(docRefs[index], data, { merge: true });
           if (isCreate) {
             counts.created += 1;
@@ -189,9 +238,29 @@ export async function syncSypramToFirestore(
         });
         await batch.commit();
       } else {
-        snaps.forEach((snap) => {
+        snaps.forEach((snap, index) => {
           if (snap.exists) counts.updated += 1;
           else counts.created += 1;
+          const product = group[index];
+          const { key: categoryKey } = normalizeCategory(product.data.category);
+          const sellability = getSellability(product.data.category);
+          const existing = snap.data() as
+            | {
+                onlineBlockReason?: string;
+                isSellableOnline?: boolean;
+              }
+            | undefined;
+          const manualBlock =
+            typeof existing?.onlineBlockReason === "string" &&
+            existing.onlineBlockReason.startsWith("MANUAL_");
+
+          if (manualBlock || !sellability.isSellableOnline) {
+            counts.blockedCount += 1;
+            blockedByCategory[categoryKey] =
+              (blockedByCategory[categoryKey] ?? 0) + 1;
+          } else {
+            counts.sellableCount += 1;
+          }
         });
       }
     }
@@ -207,6 +276,7 @@ export async function syncSypramToFirestore(
     runId,
     dryRun,
     durationMs: Date.now() - startedAt,
+    blockedByCategory,
   };
 
   const status = counts.errors > 0 ? "failed" : "success";
@@ -217,6 +287,8 @@ export async function syncSypramToFirestore(
     dryRun,
     status,
     counts,
+    blockedByCategory,
+    sellableCount: counts.sellableCount,
     errors,
     requestedBy: requestedBy ?? null,
     startedAt: FieldValue.serverTimestamp(),
@@ -230,6 +302,22 @@ export async function syncSypramToFirestore(
     },
     { merge: true }
   );
+
+  if (!dryRun) {
+    const sizes = Array.from(facetSizes).sort((a, b) => a.localeCompare(b));
+    const packs = Array.from(facetPacks).sort((a, b) => a.localeCompare(b));
+    await db
+      .collection("catalogMeta")
+      .doc("shopFacets")
+      .set(
+        {
+          sizes,
+          packs,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+  }
 
   return { ok: true, summary, errors };
 }

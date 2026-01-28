@@ -208,6 +208,8 @@ export async function POST(request: Request) {
     const db = adminDb();
     const productsRef = db.collection("products");
     const orderItems: OrderItem[] = [];
+    const blockedItems: string[] = [];
+    const outOfStockItems: string[] = [];
     let subtotalCents = 0;
     let taxableSubtotalCents = 0;
 
@@ -226,20 +228,17 @@ export async function POST(request: Request) {
         image?: string;
         category?: string;
         taxable?: boolean;
+        isSellableOnline?: boolean;
       };
+      if (data.isSellableOnline !== true) {
+        blockedItems.push(data.name ?? item.productId);
+        continue;
+      }
       const stock = parseNumber(data.stock);
       const qty = parseNumber(item.qty);
-      if (stock <= 0 || qty <= 0) {
-        return NextResponse.json(
-          { error: "Some items are out of stock." },
-          { status: 400 }
-        );
-      }
-      if (qty > stock) {
-        return NextResponse.json(
-          { error: "Some items exceed available stock." },
-          { status: 400 }
-        );
+      if (stock <= 0 || qty <= 0 || qty > stock) {
+        outOfStockItems.push(data.name ?? item.productId);
+        continue;
       }
       const price = parseNumber(data.price);
       const priceCents = Math.round(price * 100);
@@ -256,6 +255,33 @@ export async function POST(request: Request) {
         image: data.image ?? null,
         category: data.category ?? "Other",
       });
+    }
+
+    if (blockedItems.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Blocked items: ${blockedItems.join(", ")}`,
+          blockedItems,
+        },
+        { status: 400 }
+      );
+    }
+
+    if (outOfStockItems.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Out of stock: ${outOfStockItems.join(", ")}`,
+          outOfStockItems,
+        },
+        { status: 400 }
+      );
+    }
+
+    if (orderItems.length === 0) {
+      return NextResponse.json(
+        { error: "Cart is empty." },
+        { status: 400 }
+      );
     }
 
     const subtotal = subtotalCents / 100;

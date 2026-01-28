@@ -2,14 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  collection,
-  documentId,
-  getDocs,
-  onSnapshot,
-  query,
-  where,
-} from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 import { ShopProductCard } from "@/components/products/ShopProductCard";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -21,49 +14,19 @@ import { db } from "@/lib/firebase";
 import { addFavorite, removeFavorite } from "@/services/favorites";
 import type { Product } from "@/services/productTypes";
 
-function chunk<T>(items: T[], size: number) {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size) {
-    chunks.push(items.slice(i, i + size));
-  }
-  return chunks;
-}
-
 async function fetchProductsByIds(ids: string[]) {
-  if (!db) {
-    throw new Error("Firestore client is not initialized.");
+  const response = await fetch("/api/products/by-ids", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to load favorites.");
   }
 
-  const productMap = new Map<string, Product>();
-  const groups = chunk(ids, 10);
-
-  for (const group of groups) {
-    const snapshot = await getDocs(
-      query(collection(db, "products"), where(documentId(), "in", group))
-    );
-
-    snapshot.docs.forEach((doc) => {
-      const data = doc.data() as Partial<Product>;
-      productMap.set(doc.id, {
-        id: doc.id,
-        name: data.name ?? "Unnamed item",
-        category: data.category ?? "Other",
-        subcategory: data.subcategory ?? "",
-        price: typeof data.price === "number" ? data.price : 0,
-        image: data.image ?? "",
-        stock: typeof data.stock === "number" ? data.stock : 0,
-        inStock:
-          typeof data.inStock === "boolean"
-            ? data.inStock
-            : (data.stock ?? 0) > 0,
-        createdAt: null,
-      });
-    });
-  }
-
-  return ids
-    .map((id) => productMap.get(id))
-    .filter((item): item is Product => Boolean(item));
+  const payload = (await response.json()) as { items?: Product[] };
+  return payload.items ?? [];
 }
 
 export default function FavoritesClient() {
