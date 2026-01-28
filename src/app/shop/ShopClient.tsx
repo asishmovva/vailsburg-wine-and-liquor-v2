@@ -532,9 +532,9 @@ function FiltersPanel({
       </div>
 
       <div
-        className={`fixed bottom-0 left-0 right-0 flex max-h-[85vh] flex-col rounded-t-3xl border-t border-zinc-200 bg-white p-6 shadow-xl transition-transform lg:hidden ${
+        className={`fixed bottom-0 left-0 right-0 flex h-[85dvh] flex-col rounded-t-3xl border-t border-zinc-200 bg-white p-6 shadow-xl transition-transform lg:hidden ${
           open ? "translate-y-0" : "translate-y-full"
-        }`}
+        } overflow-hidden`}
       >
         <FiltersContent
           filters={filters}
@@ -589,7 +589,7 @@ function FiltersContent({
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-zinc-900">Filters</h2>
         <button
