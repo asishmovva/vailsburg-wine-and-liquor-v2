@@ -66,6 +66,8 @@ export default function ProductClient({ id }: { id: string }) {
 
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [related, setRelated] = useState<Product[]>([]);
+  const [variants, setVariants] = useState<Product[]>([]);
+  const [variantsLoading, setVariantsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +157,9 @@ export default function ProductClient({ id }: { id: string }) {
       .then((data) => {
         if (!active) return;
         const filtered = (data.items ?? []).filter(
-          (item) => item.id !== product.id
+          (item) =>
+            item.id !== product.id &&
+            (!product.groupKey || item.groupKey !== product.groupKey)
         );
         setRelated(filtered.slice(0, 6));
       })
@@ -172,6 +176,40 @@ export default function ProductClient({ id }: { id: string }) {
       active = false;
     };
   }, [product]);
+
+  useEffect(() => {
+    if (!product?.groupKey) {
+      setVariants([]);
+      return;
+    }
+
+    let active = true;
+    setVariantsLoading(true);
+
+    fetch(
+      `/api/products/by-group?groupKey=${encodeURIComponent(product.groupKey)}`
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Unable to load variants.");
+        return res.json() as Promise<{ items: Product[] }>;
+      })
+      .then((data) => {
+        if (!active) return;
+        setVariants(data.items ?? []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setVariants([]);
+      })
+      .finally(() => {
+        if (!active) return;
+        setVariantsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [product?.groupKey]);
 
   const isFavorite = product ? favorites.has(product.id) : false;
 
@@ -350,6 +388,44 @@ export default function ProductClient({ id }: { id: string }) {
 
             {product.upc ? (
               <p className="text-xs text-zinc-500">UPC: {product.upc}</p>
+            ) : null}
+
+            {variantsLoading ? (
+              <p className="text-xs text-zinc-500">Loading sizes...</p>
+            ) : variants.length > 1 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                  Available sizes
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {variants.map((variant) => {
+                    const label = [variant.size, variant.pack]
+                      .filter(Boolean)
+                      .join(" • ");
+                    const isCurrent = variant.id === product.id;
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        className={`rounded-full border px-3 py-2 text-xs font-medium transition ${
+                          isCurrent
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : variant.inStock
+                              ? "border-zinc-200 text-zinc-700"
+                              : "border-zinc-200 text-zinc-400"
+                        }`}
+                        disabled={!variant.inStock || isCurrent}
+                        onClick={() =>
+                          router.push(`/product/${variant.id}`)
+                        }
+                      >
+                        {label || "Variant"}
+                        {!variant.inStock ? " • OOS" : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             ) : null}
           </Card>
 
