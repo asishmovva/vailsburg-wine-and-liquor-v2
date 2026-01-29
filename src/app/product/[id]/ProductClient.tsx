@@ -49,6 +49,24 @@ const CATEGORY_STYLES: Record<string, { label: string; classes: string }> = {
   },
 };
 
+function parseSizeValue(value: string) {
+  const match = value.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number.parseFloat(match[1]) : Number.NaN;
+}
+
+function sortVariants(items: Product[]) {
+  return [...items].sort((a, b) => {
+    const sizeA = parseSizeValue(a.size ?? "");
+    const sizeB = parseSizeValue(b.size ?? "");
+    if (!Number.isNaN(sizeA) && !Number.isNaN(sizeB) && sizeA !== sizeB) {
+      return sizeA - sizeB;
+    }
+    const packCompare = (a.pack ?? "").localeCompare(b.pack ?? "");
+    if (packCompare !== 0) return packCompare;
+    return a.price - b.price;
+  });
+}
+
 function getPlaceholder(category: string) {
   const key = category.trim().toUpperCase();
   return (
@@ -159,7 +177,10 @@ export default function ProductClient({ id }: { id: string }) {
         const filtered = (data.items ?? []).filter(
           (item) =>
             item.id !== product.id &&
-            (!product.groupKey || item.groupKey !== product.groupKey)
+            (!product.groupKey || item.groupKey !== product.groupKey) &&
+            (product.groupKey ||
+              item.name.trim().toLowerCase() !==
+                product.name.trim().toLowerCase())
         );
         setRelated(filtered.slice(0, 6));
       })
@@ -178,38 +199,62 @@ export default function ProductClient({ id }: { id: string }) {
   }, [product]);
 
   useEffect(() => {
-    if (!product?.groupKey) {
+    if (!product) {
       setVariants([]);
       return;
     }
 
     let active = true;
-    setVariantsLoading(true);
+    const nameKey = product.name.trim().toLowerCase();
+    const categoryParam = product.category.trim().toUpperCase();
 
-    fetch(
-      `/api/products/by-group?groupKey=${encodeURIComponent(product.groupKey)}`
-    )
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Unable to load variants.");
-        return res.json() as Promise<{ items: Product[] }>;
-      })
-      .then((data) => {
+    const loadVariants = async () => {
+      setVariantsLoading(true);
+      try {
+        let items: Product[] = [];
+
+        if (product.groupKey) {
+          const res = await fetch(
+            `/api/products/by-group?groupKey=${encodeURIComponent(
+              product.groupKey
+            )}`
+          );
+          if (res.ok) {
+            const data = (await res.json()) as { items: Product[] };
+            items = data.items ?? [];
+          }
+        }
+
+        if (items.length <= 1 && nameKey) {
+          const params = new URLSearchParams();
+          if (categoryParam) params.set("category", categoryParam);
+          params.set("q", product.name);
+          const res = await fetch(`/api/products?${params.toString()}`);
+          if (res.ok) {
+            const data = (await res.json()) as { items: Product[] };
+            items = (data.items ?? []).filter(
+              (item) => item.name.trim().toLowerCase() === nameKey
+            );
+          }
+        }
+
         if (!active) return;
-        setVariants(data.items ?? []);
-      })
-      .catch(() => {
+        setVariants(sortVariants(items));
+      } catch {
         if (!active) return;
         setVariants([]);
-      })
-      .finally(() => {
+      } finally {
         if (!active) return;
         setVariantsLoading(false);
-      });
+      }
+    };
+
+    void loadVariants();
 
     return () => {
       active = false;
     };
-  }, [product?.groupKey]);
+  }, [product]);
 
   const isFavorite = product ? favorites.has(product.id) : false;
 
