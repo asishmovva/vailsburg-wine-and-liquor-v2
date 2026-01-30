@@ -101,8 +101,16 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
           Order #{orderNumberFromId(orderId)}
         </h1>
         <p className="text-sm text-zinc-600 capitalize">
-          Status: {order.status ?? "processing"}
+          Payment status: {order.status ?? "processing"}
         </p>
+        <p className="text-sm text-zinc-600 capitalize">
+          Fulfillment status: {order.fulfillmentStatus ?? "processing"}
+        </p>
+        {order.pos?.pushStatus === "failed" ? (
+          <p className="text-xs text-amber-600">
+            Store confirmation pending.
+          </p>
+        ) : null}
         <Link
           href="/orders"
           className="text-sm text-zinc-600 underline-offset-4 hover:underline"

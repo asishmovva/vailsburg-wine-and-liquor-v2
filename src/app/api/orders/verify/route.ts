@@ -12,12 +12,30 @@ type OrderData = {
   items?: Array<{ productId: string; qty: number }>;
   total?: number;
   fulfillment?: "delivery" | "pickup";
+  fulfillmentStatus?: string;
+  pos?: {
+    pushStatus?: string;
+    attempts?: number;
+    posOrderId?: string | null;
+  };
   createdAt?: unknown;
   stripe?: {
     paymentIntentId?: string;
     checkoutSessionId?: string;
   };
 };
+
+function buildPosQueueUpdate(order: OrderData) {
+  const existing = order.pos ?? {};
+  if (existing.pushStatus === "pushed" || existing.posOrderId) {
+    return existing;
+  }
+  return {
+    pushStatus: "queued",
+    attempts: typeof existing.attempts === "number" ? existing.attempts : 0,
+    posOrderId: existing.posOrderId ?? null,
+  };
+}
 
 function isFinalStatus(status?: string) {
   return status === "paid" || status === "failed" || status === "cancelled" || status === "fulfilled";
@@ -123,6 +141,8 @@ export async function GET(request: Request) {
       inventoryWarning,
       paidAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
+      fulfillmentStatus: order.fulfillmentStatus ?? "processing",
+      pos: buildPosQueueUpdate(order),
       stripe: {
         paymentIntentId: paymentIntentId ?? order.stripe?.paymentIntentId ?? null,
         checkoutSessionId: checkoutSessionId ?? order.stripe?.checkoutSessionId ?? null,
@@ -142,6 +162,8 @@ export async function GET(request: Request) {
           status: "paid",
           total: order.total ?? 0,
           fulfillment: order.fulfillment ?? "pickup",
+          fulfillmentStatus: order.fulfillmentStatus ?? "processing",
+          posPushStatus: order.pos?.pushStatus ?? "queued",
           createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         },

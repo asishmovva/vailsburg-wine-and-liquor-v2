@@ -42,6 +42,8 @@ type OrderItem = {
   qty: number;
   image: string | null;
   category: string;
+  sku?: string | null;
+  upc?: string | null;
 };
 
 function parseNumber(value: unknown) {
@@ -228,6 +230,8 @@ export async function POST(request: Request) {
         image?: string;
         category?: string;
         taxable?: boolean;
+        sku?: string;
+        upc?: string;
         isSellableOnline?: boolean;
       };
       if (data.isSellableOnline !== true) {
@@ -254,6 +258,8 @@ export async function POST(request: Request) {
         qty,
         image: data.image ?? null,
         category: data.category ?? "Other",
+        sku: data.sku ?? null,
+        upc: data.upc ?? null,
       });
     }
 

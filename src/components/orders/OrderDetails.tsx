@@ -20,6 +20,7 @@ export type OrderItem = {
 export type OrderRecord = {
   id: string;
   status?: string;
+  fulfillmentStatus?: string;
   fulfillment: "delivery" | "pickup";
   delivery?: DeliveryInfo | null;
   items: OrderItem[];
@@ -28,6 +29,7 @@ export type OrderRecord = {
   tip: number;
   tax: number;
   total: number;
+  pos?: { pushStatus?: string } | null;
 };
 
 const CATEGORY_STYLES: Record<string, { label: string; classes: string }> = {

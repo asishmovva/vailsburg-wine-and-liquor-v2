@@ -61,6 +61,22 @@ SYPRAM_PIN=your_sypram_pin
 
 Sypram sync runs server-side only and is guarded by a 30-minute cooldown.
 
+## POS order push (Phase 10)
+
+Add these to your `.env.local` (do not commit secrets):
+
+```
+SYPRAM_ORDER_BASE_URL=https://DataServicesUAT.sypramsoftware.com
+SYPRAM_USERID=your_sypram_username
+SYPRAM_PASSWORD=your_sypram_password
+SYPRAM_PIN=your_sypram_pin
+POS_PUSH_ENABLED=false
+```
+
+POS order push is server-only and is queued after payment succeeds. Set
+`POS_PUSH_ENABLED=true` to enable actual pushes. Status sync is not implemented
+yet (depends on Sypram order status endpoint confirmation).
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

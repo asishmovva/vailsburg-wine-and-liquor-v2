@@ -15,6 +15,8 @@ import { formatOrderDate, orderNumberFromId } from "@/utils/order";
 type OrderPointer = {
   orderId: string;
   status?: string;
+  fulfillmentStatus?: string;
+  posPushStatus?: string;
   total?: number;
   fulfillment?: "delivery" | "pickup";
   createdAt?: Timestamp;
@@ -247,6 +249,17 @@ function OrdersContent() {
             <span className="font-semibold text-zinc-900">
               ${Number(order.total ?? 0).toFixed(2)}
             </span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
+            <span className="capitalize">
+              Fulfillment: {order.fulfillmentStatus ?? "processing"}
+            </span>
+            {order.posPushStatus === "failed" ? (
+              <span className="text-amber-600">
+                Store confirmation pending
+              </span>
+            ) : null}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">

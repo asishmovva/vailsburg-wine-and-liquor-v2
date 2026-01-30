@@ -12,6 +12,12 @@ type OrderData = {
   items?: Array<{ productId: string; qty: number }>;
   total?: number;
   fulfillment?: "delivery" | "pickup";
+  fulfillmentStatus?: string;
+  pos?: {
+    pushStatus?: string;
+    attempts?: number;
+    posOrderId?: string | null;
+  };
   createdAt?: unknown;
   stripe?: { paymentIntentId?: string; checkoutSessionId?: string };
 };
@@ -22,8 +28,22 @@ function buildPointer(orderId: string, order: OrderData) {
     status: "paid",
     total: order.total ?? 0,
     fulfillment: order.fulfillment ?? "pickup",
+    fulfillmentStatus: order.fulfillmentStatus ?? "processing",
+    posPushStatus: order.pos?.pushStatus ?? "queued",
     createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
+function buildPosQueueUpdate(order: OrderData) {
+  const existing = order.pos ?? {};
+  if (existing.pushStatus === "pushed" || existing.posOrderId) {
+    return existing;
+  }
+  return {
+    pushStatus: "queued",
+    attempts: typeof existing.attempts === "number" ? existing.attempts : 0,
+    posOrderId: existing.posOrderId ?? null,
   };
 }
 
@@ -173,6 +193,8 @@ export async function POST(request: Request) {
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
+        fulfillmentStatus: orderData.fulfillmentStatus ?? "processing",
+        pos: buildPosQueueUpdate(orderData),
         stripe: {
           paymentIntentId: intentId ?? null,
           checkoutSessionId: session.id,
@@ -263,6 +285,8 @@ export async function POST(request: Request) {
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
+        fulfillmentStatus: orderData.fulfillmentStatus ?? "processing",
+        pos: buildPosQueueUpdate(orderData),
         stripe: {
           paymentIntentId: intent.id,
           receiptUrl,
