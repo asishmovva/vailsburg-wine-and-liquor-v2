@@ -14,7 +14,10 @@ function getEnvValue(key: string) {
 }
 
 function getSypramConfig() {
-  const baseUrl = getEnvValue("SYPRAM_ORDER_BASE_URL") || DEFAULT_ORDER_BASE_URL;
+  const baseUrl =
+    getEnvValue("SYPRAM_ORDER_BASE_URL") ||
+    getEnvValue("SYPRAM_BASE_URL") ||
+    DEFAULT_ORDER_BASE_URL;
   const user = getEnvValue("SYPRAM_USERID");
   const password = getEnvValue("SYPRAM_PASSWORD");
   const pin = getEnvValue("SYPRAM_PIN");
@@ -46,16 +49,25 @@ export async function pushSypramOrder(payload: SypramOrderPayload) {
   const { baseUrl, user, password, pin } = getSypramConfig();
   const url = new URL(ORDER_PUSH_PATH, baseUrl);
 
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      Authorization: buildAuthHeader(user, password, pin),
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        Authorization: buildAuthHeader(user, password, pin),
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+  } catch (error) {
+    const message =
+      (error as Error).message ?? "Unable to reach Sypram order endpoint.";
+    throw new Error(
+      `Sypram order push failed: ${message}. Check SYPRAM_ORDER_BASE_URL.`
+    );
+  }
 
   if (!response.ok) {
     const message = await response.text();

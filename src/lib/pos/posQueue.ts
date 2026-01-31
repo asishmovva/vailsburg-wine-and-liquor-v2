@@ -210,7 +210,10 @@ export async function pushOrderToPOS(orderId: string) {
 
     return { ok: true } as const;
   } catch (error) {
-    const message = (error as Error).message ?? "POS push failed.";
+    const rawMessage = (error as Error).message ?? "POS push failed.";
+    const message = rawMessage.includes("fetch failed")
+      ? "Sypram order push failed: unable to reach Sypram. Check SYPRAM_ORDER_BASE_URL."
+      : rawMessage;
     await orderRef.update({
       "pos.pushStatus": "failed",
       "pos.error": message,
