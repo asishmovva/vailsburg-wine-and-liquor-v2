@@ -48,6 +48,16 @@ STRIPE_WEBHOOK_SECRET=whsec_...
 USE_STRIPE_TAX=false
 ```
 
+## Account dashboard (Phase 10.1)
+
+Enable the new account dashboard and billing UI via:
+
+```
+NEXT_PUBLIC_ACCOUNT_DASHBOARD_V2=true
+```
+
+Billing routes under `/api/billing/*` require an auth token in the `Authorization: Bearer <idToken>` header.
+
 ## Sypram setup (Phase 9)
 
 Add these to your `.env.local` (do not commit secrets):
