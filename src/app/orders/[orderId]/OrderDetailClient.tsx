@@ -5,7 +5,36 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
 import { OrderDetails, type OrderRecord } from "@/components/orders/OrderDetails";
+import { ORDER_STATUSES } from "@/lib/orders/status";
 import { orderNumberFromId } from "@/utils/order";
+
+const STATUS_LABELS: Record<string, string> = {
+  [ORDER_STATUSES.PENDING_PAYMENT]: "Payment pending",
+  [ORDER_STATUSES.NEW]: "New",
+  [ORDER_STATUSES.ACCEPTED]: "Accepted",
+  [ORDER_STATUSES.READY]: "Ready",
+  [ORDER_STATUSES.COMPLETED]: "Completed",
+  [ORDER_STATUSES.CANCELLED]: "Cancelled",
+  [ORDER_STATUSES.FAILED]: "Failed",
+};
+
+function normalizeStatus(status?: string) {
+  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
+  switch (status) {
+    case "payment_pending":
+      return ORDER_STATUSES.PENDING_PAYMENT;
+    case "paid":
+      return ORDER_STATUSES.NEW;
+    case "fulfilled":
+      return ORDER_STATUSES.COMPLETED;
+    case "cancelled":
+      return ORDER_STATUSES.CANCELLED;
+    case "failed":
+      return ORDER_STATUSES.FAILED;
+    default:
+      return status;
+  }
+}
 
 export default function OrderDetailClient({ orderId }: { orderId: string }) {
   const { user } = useAuth();
@@ -94,14 +123,17 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
     );
   }
 
+  const normalizedStatus = normalizeStatus(order?.status);
+  const statusLabel = STATUS_LABELS[normalizedStatus] ?? "Processing";
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold text-zinc-900">
           Order #{orderNumberFromId(orderId)}
         </h1>
-        <p className="text-sm text-zinc-600 capitalize">
-          Status: {order.status ?? "processing"}
+        <p className="text-sm text-zinc-600">
+          Status: {statusLabel}
         </p>
         <Link
           href="/orders"

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { getStripe } from "@/lib/stripe";
+import { FINAL_ORDER_STATUSES, ORDER_STATUSES } from "@/lib/orders/status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,8 +20,27 @@ type OrderData = {
   };
 };
 
+function normalizeStatus(status?: string) {
+  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
+  switch (status) {
+    case "payment_pending":
+      return ORDER_STATUSES.PENDING_PAYMENT;
+    case "paid":
+      return ORDER_STATUSES.NEW;
+    case "fulfilled":
+      return ORDER_STATUSES.COMPLETED;
+    case "cancelled":
+      return ORDER_STATUSES.CANCELLED;
+    case "failed":
+      return ORDER_STATUSES.FAILED;
+    default:
+      return status;
+  }
+}
+
 function isFinalStatus(status?: string) {
-  return status === "paid" || status === "failed" || status === "cancelled" || status === "fulfilled";
+  const normalized = normalizeStatus(status);
+  return FINAL_ORDER_STATUSES.includes(normalized as (typeof FINAL_ORDER_STATUSES)[number]);
 }
 
 export async function GET(request: Request) {
@@ -60,8 +80,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
 
-  if (isFinalStatus(order.status)) {
-    return NextResponse.json({ status: order.status, updated: false });
+  const normalizedStatus = normalizeStatus(order.status);
+  if (isFinalStatus(normalizedStatus)) {
+    return NextResponse.json({ status: normalizedStatus, updated: false });
   }
 
   const stripe = getStripe();
@@ -82,14 +103,11 @@ export async function GET(request: Request) {
       isPaid = intent.status === "succeeded";
     }
   } catch {
-    return NextResponse.json(
-      { status: order.status ?? "payment_pending", updated: false },
-      { status: 200 }
-    );
+    return NextResponse.json({ status: normalizedStatus, updated: false }, { status: 200 });
   }
 
   if (!isPaid) {
-    return NextResponse.json({ status: order.status ?? "payment_pending", updated: false });
+    return NextResponse.json({ status: normalizedStatus, updated: false });
   }
 
   const items = order.items ?? [];
@@ -119,7 +137,8 @@ export async function GET(request: Request) {
     });
 
     transaction.update(orderRef, {
-      status: "paid",
+      status: ORDER_STATUSES.NEW,
+      paid: true,
       inventoryWarning,
       paidAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -139,7 +158,7 @@ export async function GET(request: Request) {
         pointerRef,
         {
           orderId,
-          status: "paid",
+          status: ORDER_STATUSES.NEW,
           total: order.total ?? 0,
           fulfillment: order.fulfillment ?? "pickup",
           createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
@@ -152,10 +171,10 @@ export async function GET(request: Request) {
 
   console.log("[orders:verify]", {
     orderId,
-    status: "paid",
+    status: ORDER_STATUSES.NEW,
     paymentIntentId: paymentIntentId ?? null,
     checkoutSessionId: checkoutSessionId ?? null,
   });
 
-  return NextResponse.json({ status: "paid", updated: true });
+  return NextResponse.json({ status: ORDER_STATUSES.NEW, updated: true });
 }

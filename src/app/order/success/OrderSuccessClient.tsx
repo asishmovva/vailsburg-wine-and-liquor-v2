@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
 import { OrderDetails, type OrderRecord } from "@/components/orders/OrderDetails";
+import { ORDER_STATUSES } from "@/lib/orders/status";
 import { orderNumberFromId } from "@/utils/order";
 
 type Address = {
@@ -84,17 +85,41 @@ function summaryToOrder(summary: LocalSummary): OrderRecord {
   };
 }
 
-function statusCopy(status?: string) {
-  if (!status) return "Processing payment";
+function normalizeStatus(status?: string) {
+  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
   switch (status) {
-    case "paid":
-      return "Order confirmed";
     case "payment_pending":
-      return "Payment processing";
-    case "failed":
-      return "Payment failed";
+      return ORDER_STATUSES.PENDING_PAYMENT;
+    case "paid":
+      return ORDER_STATUSES.NEW;
+    case "fulfilled":
+      return ORDER_STATUSES.COMPLETED;
     case "cancelled":
-      return "Payment cancelled";
+      return ORDER_STATUSES.CANCELLED;
+    case "failed":
+      return ORDER_STATUSES.FAILED;
+    default:
+      return status;
+  }
+}
+
+function statusCopy(status?: string) {
+  const normalized = normalizeStatus(status);
+  switch (normalized) {
+    case ORDER_STATUSES.PENDING_PAYMENT:
+      return "Payment processing";
+    case ORDER_STATUSES.NEW:
+      return "Order confirmed";
+    case ORDER_STATUSES.ACCEPTED:
+      return "Order accepted";
+    case ORDER_STATUSES.READY:
+      return "Order ready";
+    case ORDER_STATUSES.COMPLETED:
+      return "Order completed";
+    case ORDER_STATUSES.CANCELLED:
+      return "Order cancelled";
+    case ORDER_STATUSES.FAILED:
+      return "Payment failed";
     default:
       return "Order confirmed";
   }
@@ -176,7 +201,8 @@ export default function OrderSuccessClient() {
       }
     };
 
-    if (!order || order.status === "payment_pending") {
+    const status = normalizeStatus(order?.status);
+    if (!order || status === ORDER_STATUSES.PENDING_PAYMENT) {
       timer = setInterval(poll, 2500);
       poll();
       return () => {
@@ -226,7 +252,7 @@ export default function OrderSuccessClient() {
           <p className="text-sm text-zinc-600">
             Order #{orderNumberFromId(orderId)}
           </p>
-          {order.status === "payment_pending" ? (
+          {normalizeStatus(order.status) === ORDER_STATUSES.PENDING_PAYMENT ? (
             <p className="text-xs text-zinc-500">
               Payment confirmation can take a moment. We&apos;ll update this page
               automatically.
