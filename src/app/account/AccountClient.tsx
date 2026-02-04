@@ -345,8 +345,8 @@ export default function AccountClient() {
   }, [loading, user, router]);
 
   const openEdit = () => {
-    setEditName(user.displayName ?? "");
-    setEditPhone(user.phoneNumber ?? "");
+    setEditName(user?.displayName ?? "");
+    setEditPhone(user?.phoneNumber ?? "");
     setEditOpen(true);
   };
 

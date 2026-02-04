@@ -6,7 +6,9 @@ import { getOrCreateStripeCustomerId } from "@/lib/server/stripeCustomers";
 
 export async function GET(req: NextRequest) {
   const { auth, error } = await requireAuth(req);
-  if (error || !auth) return error;
+  if (error || !auth) {
+    return error ?? new Response("Unauthorized", { status: 401 });
+  }
 
   const limited = rateLimit(`billing:${auth.uid}`, req, {
     limit: 30,
