@@ -49,6 +49,24 @@ const CATEGORY_STYLES: Record<string, { label: string; classes: string }> = {
   },
 };
 
+function parseSizeValue(value: string) {
+  const match = value.match(/(\d+(?:\.\d+)?)/);
+  return match ? Number.parseFloat(match[1]) : Number.NaN;
+}
+
+function sortVariants(items: Product[]) {
+  return [...items].sort((a, b) => {
+    const sizeA = parseSizeValue(a.size ?? "");
+    const sizeB = parseSizeValue(b.size ?? "");
+    if (!Number.isNaN(sizeA) && !Number.isNaN(sizeB) && sizeA !== sizeB) {
+      return sizeA - sizeB;
+    }
+    const packCompare = (a.pack ?? "").localeCompare(b.pack ?? "");
+    if (packCompare !== 0) return packCompare;
+    return a.price - b.price;
+  });
+}
+
 function getPlaceholder(category: string) {
   const key = category.trim().toUpperCase();
   return (
@@ -66,6 +84,8 @@ export default function ProductClient({ id }: { id: string }) {
 
   const [product, setProduct] = useState<ProductDetail | null>(null);
   const [related, setRelated] = useState<Product[]>([]);
+  const [variants, setVariants] = useState<Product[]>([]);
+  const [variantsLoading, setVariantsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -155,7 +175,12 @@ export default function ProductClient({ id }: { id: string }) {
       .then((data) => {
         if (!active) return;
         const filtered = (data.items ?? []).filter(
-          (item) => item.id !== product.id
+          (item) =>
+            item.id !== product.id &&
+            (!product.groupKey || item.groupKey !== product.groupKey) &&
+            (product.groupKey ||
+              item.name.trim().toLowerCase() !==
+                product.name.trim().toLowerCase())
         );
         setRelated(filtered.slice(0, 6));
       })
@@ -167,6 +192,64 @@ export default function ProductClient({ id }: { id: string }) {
         if (!active) return;
         setRelatedLoading(false);
       });
+
+    return () => {
+      active = false;
+    };
+  }, [product]);
+
+  useEffect(() => {
+    if (!product) {
+      setVariants([]);
+      return;
+    }
+
+    let active = true;
+    const nameKey = product.name.trim().toLowerCase();
+    const categoryParam = product.category.trim().toUpperCase();
+
+    const loadVariants = async () => {
+      setVariantsLoading(true);
+      try {
+        let items: Product[] = [];
+
+        if (product.groupKey) {
+          const res = await fetch(
+            `/api/products/by-group?groupKey=${encodeURIComponent(
+              product.groupKey
+            )}`
+          );
+          if (res.ok) {
+            const data = (await res.json()) as { items: Product[] };
+            items = data.items ?? [];
+          }
+        }
+
+        if (items.length <= 1 && nameKey) {
+          const params = new URLSearchParams();
+          if (categoryParam) params.set("category", categoryParam);
+          params.set("q", product.name);
+          const res = await fetch(`/api/products?${params.toString()}`);
+          if (res.ok) {
+            const data = (await res.json()) as { items: Product[] };
+            items = (data.items ?? []).filter(
+              (item) => item.name.trim().toLowerCase() === nameKey
+            );
+          }
+        }
+
+        if (!active) return;
+        setVariants(sortVariants(items));
+      } catch {
+        if (!active) return;
+        setVariants([]);
+      } finally {
+        if (!active) return;
+        setVariantsLoading(false);
+      }
+    };
+
+    void loadVariants();
 
     return () => {
       active = false;
@@ -350,6 +433,44 @@ export default function ProductClient({ id }: { id: string }) {
 
             {product.upc ? (
               <p className="text-xs text-zinc-500">UPC: {product.upc}</p>
+            ) : null}
+
+            {variantsLoading ? (
+              <p className="text-xs text-zinc-500">Loading sizes...</p>
+            ) : variants.length > 1 ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                  Available sizes
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {variants.map((variant) => {
+                    const label = [variant.size, variant.pack]
+                      .filter(Boolean)
+                      .join(" • ");
+                    const isCurrent = variant.id === product.id;
+                    return (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        className={`rounded-full border px-3 py-2 text-xs font-medium transition ${
+                          isCurrent
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : variant.inStock
+                              ? "border-zinc-200 text-zinc-700"
+                              : "border-zinc-200 text-zinc-400"
+                        }`}
+                        disabled={!variant.inStock || isCurrent}
+                        onClick={() =>
+                          router.push(`/product/${variant.id}`)
+                        }
+                      >
+                        {label || "Variant"}
+                        {!variant.inStock ? " • OOS" : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             ) : null}
           </Card>
 

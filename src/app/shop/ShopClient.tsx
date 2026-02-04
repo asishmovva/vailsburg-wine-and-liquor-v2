@@ -20,6 +20,8 @@ const SORT_OPTIONS: { value: ProductSort; label: string }[] = [
   { value: "newest", label: "Newest" },
 ];
 
+const PAGE_SIZE = 48;
+
 const CATEGORY_OPTIONS = [
   "BEER",
   "WINE",
@@ -149,6 +151,9 @@ export default function ShopClient() {
     new Set()
   );
   const [resultCount, setResultCount] = useState(0);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [facetSizes, setFacetSizes] = useState<string[]>([]);
   const [facetPacks, setFacetPacks] = useState<string[]>([]);
   const [facetError, setFacetError] = useState<string | null>(null);
@@ -204,11 +209,16 @@ export default function ShopClient() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const queryString = searchKey;
+    const params = new URLSearchParams(searchKey);
+    params.delete("page");
+    params.set("page", "1");
+    const queryString = params.toString();
     const url = queryString ? `/api/products?${queryString}` : "/api/products";
 
     setLoading(true);
     setError(null);
+    setPage(1);
+    setHasMore(false);
 
     fetch(url, { signal: controller.signal })
       .then(async (res) => {
@@ -218,8 +228,10 @@ export default function ShopClient() {
         return res.json() as Promise<{ items: Product[]; total: number }>;
       })
       .then((data) => {
-        setProducts(data.items ?? []);
-        setResultCount(data.total ?? data.items?.length ?? 0);
+        const items = data.items ?? [];
+        setProducts(items);
+        setResultCount(data.total ?? items.length);
+        setHasMore(items.length === PAGE_SIZE);
       })
       .catch((err: Error) => {
         if (err.name === "AbortError") return;
@@ -326,6 +338,47 @@ export default function ShopClient() {
 
   const displayedCount =
     filters.size || filters.pack ? filteredProducts.length : resultCount;
+
+  const handleLoadMore = () => {
+    if (loadingMore || !hasMore) return;
+
+    const nextPage = page + 1;
+    const params = new URLSearchParams(searchKey);
+    params.delete("page");
+    params.set("page", String(nextPage));
+    const queryString = params.toString();
+    const url = queryString ? `/api/products?${queryString}` : "/api/products";
+
+    setLoadingMore(true);
+    setError(null);
+
+    fetch(url)
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error("Unable to load more products.");
+        }
+        return res.json() as Promise<{ items: Product[]; total: number }>;
+      })
+      .then((data) => {
+        const items = data.items ?? [];
+        setProducts((prev) => {
+          const map = new Map(prev.map((item) => [item.id, item]));
+          items.forEach((item) => {
+            map.set(item.id, item);
+          });
+          return Array.from(map.values());
+        });
+        setResultCount((prev) => Math.max(prev, data.total ?? items.length));
+        setPage(nextPage);
+        setHasMore(items.length === PAGE_SIZE);
+      })
+      .catch((err: Error) => {
+        setError(err.message);
+      })
+      .finally(() => {
+        setLoadingMore(false);
+      });
+  };
 
   const handleFavoriteToggle = async (productId: string) => {
     if (!user) {
@@ -455,6 +508,18 @@ export default function ShopClient() {
           ))}
         </div>
       )}
+
+      {filteredProducts.length > 0 && hasMore ? (
+        <div className="flex justify-center">
+          <Button
+            variant="outline"
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? "Loading more..." : "Load more"}
+          </Button>
+        </div>
+      ) : null}
 
       <FiltersPanel
         open={filtersOpen}
