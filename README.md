@@ -71,6 +71,10 @@ SYPRAM_PIN=your_sypram_pin
 
 Sypram sync runs server-side only and is guarded by a 30-minute cooldown.
 
+## Orders note
+
+POS order push was canceled due to vendor cost. Orders are website-only and will be confirmed via Stripe webhooks (Phase 12).
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
