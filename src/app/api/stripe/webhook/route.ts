@@ -92,24 +92,28 @@ export async function POST(request: Request) {
   });
 
   const eventRef = db.collection("stripeEvents").doc(eventId);
-  const eventSnap = await eventRef.get();
-  if (eventSnap.exists) {
-    console.log("[stripe:webhook] order_exists_skip", {
+  try {
+    await eventRef.create({
       eventId,
-      eventType,
+      type: eventType,
       orderId: orderIdFromEvent ?? null,
+      paymentIntentId: paymentIntentId ?? null,
+      checkoutSessionId: checkoutSessionId ?? null,
+      createdAt: FieldValue.serverTimestamp(),
     });
-    return NextResponse.json({ received: true, duplicate: true });
+  } catch (error) {
+    const code = (error as { code?: string | number }).code;
+    if (code === 6 || code === "already-exists") {
+      console.log("[stripe:webhook] order_exists_skip", {
+        eventId,
+        eventType,
+        orderId: orderIdFromEvent ?? null,
+      });
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    console.error("[stripe:webhook] webhook_error", { eventId, eventType, code });
+    return NextResponse.json({ error: "Webhook processing failed." }, { status: 500 });
   }
-
-  await eventRef.set({
-    eventId,
-    type: eventType,
-    orderId: orderIdFromEvent ?? null,
-    paymentIntentId: paymentIntentId ?? null,
-    checkoutSessionId: checkoutSessionId ?? null,
-    createdAt: FieldValue.serverTimestamp(),
-  });
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as {
