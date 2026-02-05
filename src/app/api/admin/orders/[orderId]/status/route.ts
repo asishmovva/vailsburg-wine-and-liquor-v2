@@ -27,9 +27,11 @@ export async function POST(
   }
 
   let nextStatus: string | undefined;
+  let reason: string | undefined;
   try {
-    const body = (await req.json()) as { status?: string };
+    const body = (await req.json()) as { status?: string; reason?: string };
     nextStatus = body.status;
+    reason = typeof body.reason === "string" ? body.reason.trim() : undefined;
   } catch {
     nextStatus = undefined;
   }
@@ -52,8 +54,17 @@ export async function POST(
     createdAt?: unknown;
   };
 
+  if (nextStatus === ORDER_STATUSES.CANCELLED && !reason) {
+    return NextResponse.json(
+      { error: "Cancellation reason required." },
+      { status: 400 }
+    );
+  }
+
   await orderRef.update({
     status: nextStatus,
+    cancellationReason:
+      nextStatus === ORDER_STATUSES.CANCELLED ? reason ?? null : FieldValue.delete(),
     updatedAt: FieldValue.serverTimestamp(),
   });
 
