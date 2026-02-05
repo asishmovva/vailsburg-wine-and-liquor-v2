@@ -421,11 +421,11 @@ export default function CheckoutClient() {
 
   useEffect(() => {
     if (fulfillment !== "delivery") return;
-    if (addressSearch.trim() && !coords) {
+    if (!addressQuery && !coords) {
       setValidation({ status: "idle" });
       return;
     }
-    if (!addressQuery && !coords) {
+    if (addressQuery.trim().length < 3 && !coords) {
       setValidation({ status: "idle" });
       return;
     }
