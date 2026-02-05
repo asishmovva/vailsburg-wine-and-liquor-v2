@@ -398,7 +398,18 @@ export default function CheckoutClient() {
         if (!results.length) {
           throw new Error("Address not found");
         }
-        resolvedCoords = results[0].coordinates;
+        const match = results[0];
+        resolvedCoords = match.coordinates;
+        setAddress((prev) => ({
+          ...prev,
+          street: match.street || prev.street,
+          city: match.city || prev.city,
+          state: match.state || "NJ",
+          zip: match.zip || prev.zip,
+        }));
+        if (match.label && addressSearch.trim() !== match.label) {
+          setAddressSearch(match.label);
+        }
       }
 
       const miles = await fetchDistance(resolvedCoords, controller.signal);
@@ -417,7 +428,7 @@ export default function CheckoutClient() {
         message: "Unable to validate address. Try again.",
       });
     }
-  }, [addressQuery, coords, fulfillment]);
+  }, [addressQuery, addressSearch, coords, fulfillment]);
 
   useEffect(() => {
     if (fulfillment !== "delivery") return;
