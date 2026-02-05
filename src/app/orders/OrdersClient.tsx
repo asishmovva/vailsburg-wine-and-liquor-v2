@@ -10,6 +10,7 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { db } from "@/lib/firebase";
+import { ORDER_STATUSES } from "@/lib/orders/status";
 import { formatOrderDate, orderNumberFromId } from "@/utils/order";
 
 type OrderPointer = {
@@ -30,16 +31,52 @@ type OrderItem = {
 };
 
 const STATUS_STYLES: Record<string, string> = {
+  [ORDER_STATUSES.PENDING_PAYMENT]: "bg-amber-100 text-amber-700",
+  [ORDER_STATUSES.NEW]: "bg-emerald-100 text-emerald-700",
+  [ORDER_STATUSES.ACCEPTED]: "bg-blue-100 text-blue-700",
+  [ORDER_STATUSES.READY]: "bg-indigo-100 text-indigo-700",
+  [ORDER_STATUSES.COMPLETED]: "bg-zinc-200 text-zinc-700",
+  [ORDER_STATUSES.CANCELLED]: "bg-zinc-200 text-zinc-700",
+  [ORDER_STATUSES.FAILED]: "bg-red-100 text-red-700",
   paid: "bg-emerald-100 text-emerald-700",
   payment_pending: "bg-amber-100 text-amber-700",
-  failed: "bg-red-100 text-red-700",
+  fulfilled: "bg-zinc-200 text-zinc-700",
   cancelled: "bg-zinc-200 text-zinc-700",
-  fulfilled: "bg-blue-100 text-blue-700",
+  failed: "bg-red-100 text-red-700",
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  [ORDER_STATUSES.PENDING_PAYMENT]: "Payment pending",
+  [ORDER_STATUSES.NEW]: "New",
+  [ORDER_STATUSES.ACCEPTED]: "Accepted",
+  [ORDER_STATUSES.READY]: "Ready",
+  [ORDER_STATUSES.COMPLETED]: "Completed",
+  [ORDER_STATUSES.CANCELLED]: "Cancelled",
+  [ORDER_STATUSES.FAILED]: "Failed",
+};
+
+function normalizeStatus(status?: string) {
+  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
+  switch (status) {
+    case "payment_pending":
+      return ORDER_STATUSES.PENDING_PAYMENT;
+    case "paid":
+      return ORDER_STATUSES.NEW;
+    case "fulfilled":
+      return ORDER_STATUSES.COMPLETED;
+    case "cancelled":
+      return ORDER_STATUSES.CANCELLED;
+    case "failed":
+      return ORDER_STATUSES.FAILED;
+    default:
+      return status;
+  }
+}
+
 function StatusPill({ status }: { status?: string }) {
-  const label = status?.replace("_", " ") ?? "processing";
-  const classes = STATUS_STYLES[status ?? ""] ?? "bg-zinc-100 text-zinc-600";
+  const normalized = normalizeStatus(status);
+  const label = STATUS_LABELS[normalized] ?? "Processing";
+  const classes = STATUS_STYLES[normalized] ?? "bg-zinc-100 text-zinc-600";
   return (
     <span className={`rounded-full px-3 py-1 text-xs font-medium ${classes}`}>
       {label}

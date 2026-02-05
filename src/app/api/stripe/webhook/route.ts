@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { getStripe } from "@/lib/stripe";
+import { ORDER_STATUSES } from "@/lib/orders/status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +20,7 @@ type OrderData = {
 function buildPointer(orderId: string, order: OrderData) {
   return {
     orderId,
-    status: "paid",
+    status: ORDER_STATUSES.NEW,
     total: order.total ?? 0,
     fulfillment: order.fulfillment ?? "pickup",
     createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
@@ -48,6 +49,9 @@ export async function POST(request: Request) {
   try {
     event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
   } catch (error) {
+    console.error("[stripe:webhook] webhook_error", {
+      message: (error as Error).message,
+    });
     return NextResponse.json(
       { error: `Webhook Error: ${(error as Error).message}` },
       { status: 400 }
@@ -79,7 +83,7 @@ export async function POST(request: Request) {
     orderIdFromEvent = session.metadata?.orderId;
   }
 
-  console.log("[stripe:webhook]", {
+  console.log("[stripe:webhook] webhook_verified", {
     eventId,
     eventType,
     orderId: orderIdFromEvent ?? null,
@@ -88,20 +92,28 @@ export async function POST(request: Request) {
   });
 
   const eventRef = db.collection("stripeEvents").doc(eventId);
-  const eventSnap = await eventRef.get();
-  if (eventSnap.exists) {
-    console.log("[stripe:webhook] duplicate", { eventId, eventType });
-    return NextResponse.json({ received: true, duplicate: true });
+  try {
+    await eventRef.create({
+      eventId,
+      type: eventType,
+      orderId: orderIdFromEvent ?? null,
+      paymentIntentId: paymentIntentId ?? null,
+      checkoutSessionId: checkoutSessionId ?? null,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    const code = (error as { code?: string | number }).code;
+    if (code === 6 || code === "already-exists") {
+      console.log("[stripe:webhook] order_exists_skip", {
+        eventId,
+        eventType,
+        orderId: orderIdFromEvent ?? null,
+      });
+      return NextResponse.json({ received: true, duplicate: true });
+    }
+    console.error("[stripe:webhook] webhook_error", { eventId, eventType, code });
+    return NextResponse.json({ error: "Webhook processing failed." }, { status: 500 });
   }
-
-  await eventRef.set({
-    eventId,
-    type: eventType,
-    orderId: orderIdFromEvent ?? null,
-    paymentIntentId: paymentIntentId ?? null,
-    checkoutSessionId: checkoutSessionId ?? null,
-    createdAt: FieldValue.serverTimestamp(),
-  });
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as {
@@ -126,7 +138,12 @@ export async function POST(request: Request) {
     }
 
     const orderData = orderSnap.data() as OrderData;
-    if (orderData.status === "paid" || orderData.status === "fulfilled") {
+    if (
+      orderData.status === ORDER_STATUSES.NEW ||
+      orderData.status === ORDER_STATUSES.ACCEPTED ||
+      orderData.status === ORDER_STATUSES.READY ||
+      orderData.status === ORDER_STATUSES.COMPLETED
+    ) {
       if (orderData.userId) {
         await db
           .collection("users")
@@ -135,6 +152,10 @@ export async function POST(request: Request) {
           .doc(orderId)
           .set(buildPointer(orderId, orderData), { merge: true });
       }
+      console.log("[stripe:webhook] order_exists_skip", {
+        orderId,
+        eventType,
+      });
       return NextResponse.json({ received: true });
     }
 
@@ -169,7 +190,8 @@ export async function POST(request: Request) {
       });
 
       transaction.update(orderRef, {
-        status: "paid",
+        status: ORDER_STATUSES.NEW,
+        paid: true,
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -189,6 +211,11 @@ export async function POST(request: Request) {
           merge: true,
         });
       }
+    });
+
+    console.log("[stripe:webhook] order_created", {
+      orderId,
+      eventType,
     });
 
     return NextResponse.json({ received: true });
@@ -219,7 +246,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ received: true });
     }
 
-    if (orderData.status === "paid" || orderData.status === "fulfilled") {
+    if (
+      orderData.status === ORDER_STATUSES.NEW ||
+      orderData.status === ORDER_STATUSES.ACCEPTED ||
+      orderData.status === ORDER_STATUSES.READY ||
+      orderData.status === ORDER_STATUSES.COMPLETED
+    ) {
       if (orderData.userId) {
         await db
           .collection("users")
@@ -228,6 +260,10 @@ export async function POST(request: Request) {
           .doc(orderId)
           .set(buildPointer(orderId, orderData), { merge: true });
       }
+      console.log("[stripe:webhook] order_exists_skip", {
+        orderId,
+        eventType,
+      });
       return NextResponse.json({ received: true });
     }
 
@@ -259,7 +295,8 @@ export async function POST(request: Request) {
       });
 
       transaction.update(orderRef, {
-        status: "paid",
+        status: ORDER_STATUSES.NEW,
+        paid: true,
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -281,6 +318,11 @@ export async function POST(request: Request) {
       }
     });
 
+    console.log("[stripe:webhook] order_created", {
+      orderId,
+      eventType,
+    });
+
     return NextResponse.json({ received: true });
   }
 
@@ -292,9 +334,14 @@ export async function POST(request: Request) {
       const orderSnap = await orderRef.get();
       if (orderSnap.exists) {
         const orderData = orderSnap.data() as OrderData;
-        if (orderData.status !== "paid" && orderData.status !== "fulfilled") {
+        if (
+          orderData.status !== ORDER_STATUSES.NEW &&
+          orderData.status !== ORDER_STATUSES.ACCEPTED &&
+          orderData.status !== ORDER_STATUSES.READY &&
+          orderData.status !== ORDER_STATUSES.COMPLETED
+        ) {
           await orderRef.update({
-            status: "failed",
+            status: ORDER_STATUSES.FAILED,
             updatedAt: FieldValue.serverTimestamp(),
           });
           if (orderData.userId) {
@@ -306,7 +353,7 @@ export async function POST(request: Request) {
               .set(
                 {
                   orderId,
-                  status: "failed",
+                  status: ORDER_STATUSES.FAILED,
                   total: orderData.total ?? 0,
                   fulfillment: orderData.fulfillment ?? "pickup",
                   createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),
@@ -329,9 +376,14 @@ export async function POST(request: Request) {
       const orderSnap = await orderRef.get();
       if (orderSnap.exists) {
         const orderData = orderSnap.data() as OrderData;
-        if (orderData.status !== "paid" && orderData.status !== "fulfilled") {
+        if (
+          orderData.status !== ORDER_STATUSES.NEW &&
+          orderData.status !== ORDER_STATUSES.ACCEPTED &&
+          orderData.status !== ORDER_STATUSES.READY &&
+          orderData.status !== ORDER_STATUSES.COMPLETED
+        ) {
           await orderRef.update({
-            status: "cancelled",
+            status: ORDER_STATUSES.CANCELLED,
             updatedAt: FieldValue.serverTimestamp(),
           });
           if (orderData.userId) {
@@ -343,7 +395,7 @@ export async function POST(request: Request) {
               .set(
                 {
                   orderId,
-                  status: "cancelled",
+                  status: ORDER_STATUSES.CANCELLED,
                   total: orderData.total ?? 0,
                   fulfillment: orderData.fulfillment ?? "pickup",
                   createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),

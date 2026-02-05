@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { getStripe } from "@/lib/stripe";
+import { ORDER_STATUSES } from "@/lib/orders/status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -381,6 +382,7 @@ export async function POST(request: Request) {
       metadata: {
         orderId,
         userId,
+        uid: userId,
         fulfillment,
       },
     });
@@ -393,7 +395,8 @@ export async function POST(request: Request) {
       guestId: null,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
-      status: "payment_pending",
+      status: ORDER_STATUSES.PENDING_PAYMENT,
+      paid: false,
       fulfillment,
       delivery: deliveryInfo ?? null,
       deliveryFee,
@@ -419,7 +422,7 @@ export async function POST(request: Request) {
         .doc(orderId)
         .set({
           orderId,
-          status: "payment_pending",
+          status: ORDER_STATUSES.PENDING_PAYMENT,
           total: totalCents / 100,
           fulfillment,
           createdAt: FieldValue.serverTimestamp(),
