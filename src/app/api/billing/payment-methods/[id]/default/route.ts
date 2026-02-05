@@ -6,10 +6,12 @@ import { getOrCreateStripeCustomerId } from "@/lib/server/stripeCustomers";
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   const { auth, error } = await requireAuth(req);
-  if (error || !auth) return error;
+  if (error || !auth) {
+    return error ?? new Response("Unauthorized", { status: 401 });
+  }
 
   const limited = rateLimit(`billing:${auth.uid}`, req, {
     limit: 10,
@@ -17,7 +19,7 @@ export async function POST(
   });
   if (limited) return limited;
 
-  const paymentMethodId = params.id;
+  const { id: paymentMethodId } = await context.params;
   if (!paymentMethodId) {
     return new Response("Missing payment method id", { status: 400 });
   }
