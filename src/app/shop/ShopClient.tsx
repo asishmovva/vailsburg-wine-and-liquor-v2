@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -19,8 +19,6 @@ const SORT_OPTIONS: { value: ProductSort; label: string }[] = [
   { value: "price_desc", label: "Price: High to Low" },
   { value: "newest", label: "Newest" },
 ];
-
-const PAGE_SIZE = 48;
 
 const CATEGORY_OPTIONS = [
   "BEER",
@@ -151,8 +149,7 @@ export default function ShopClient() {
     new Set()
   );
   const [resultCount, setResultCount] = useState(0);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
+  const [nextPage, setNextPage] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [facetSizes, setFacetSizes] = useState<string[]>([]);
   const [facetPacks, setFacetPacks] = useState<string[]>([]);
@@ -211,27 +208,25 @@ export default function ShopClient() {
     const controller = new AbortController();
     const params = new URLSearchParams(searchKey);
     params.delete("page");
-    params.set("page", "1");
     const queryString = params.toString();
     const url = queryString ? `/api/products?${queryString}` : "/api/products";
 
     setLoading(true);
     setError(null);
-    setPage(1);
-    setHasMore(false);
+    setNextPage(null);
 
     fetch(url, { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) {
           throw new Error("Unable to load products.");
         }
-        return res.json() as Promise<{ items: Product[]; total: number }>;
+        return res.json() as Promise<{ items: Product[]; total: number; nextPage?: string | null }>;
       })
       .then((data) => {
         const items = data.items ?? [];
         setProducts(items);
-        setResultCount(data.total ?? items.length);
-        setHasMore(items.length === PAGE_SIZE);
+        setResultCount(items.length);
+        setNextPage(data.nextPage ?? null);
       })
       .catch((err: Error) => {
         if (err.name === "AbortError") return;
@@ -339,13 +334,14 @@ export default function ShopClient() {
   const displayedCount =
     filters.size || filters.pack ? filteredProducts.length : resultCount;
 
-  const handleLoadMore = () => {
-    if (loadingMore || !hasMore) return;
+  const hasMore = Boolean(nextPage);
 
-    const nextPage = page + 1;
+  const handleLoadMore = () => {
+    if (loadingMore || !nextPage) return;
+
     const params = new URLSearchParams(searchKey);
     params.delete("page");
-    params.set("page", String(nextPage));
+    params.set("page", nextPage);
     const queryString = params.toString();
     const url = queryString ? `/api/products?${queryString}` : "/api/products";
 
@@ -357,7 +353,7 @@ export default function ShopClient() {
         if (!res.ok) {
           throw new Error("Unable to load more products.");
         }
-        return res.json() as Promise<{ items: Product[]; total: number }>;
+        return res.json() as Promise<{ items: Product[]; total: number; nextPage?: string | null }>;
       })
       .then((data) => {
         const items = data.items ?? [];
@@ -366,11 +362,11 @@ export default function ShopClient() {
           items.forEach((item) => {
             map.set(item.id, item);
           });
-          return Array.from(map.values());
+          const nextItems = Array.from(map.values());
+          setResultCount(nextItems.length);
+          return nextItems;
         });
-        setResultCount((prev) => Math.max(prev, data.total ?? items.length));
-        setPage(nextPage);
-        setHasMore(items.length === PAGE_SIZE);
+        setNextPage(data.nextPage ?? null);
       })
       .catch((err: Error) => {
         setError(err.message);
@@ -469,7 +465,7 @@ export default function ShopClient() {
               Filters
             </Button>
             <span className="text-sm text-zinc-500">
-              {loading ? "Loading..." : `${displayedCount} items`}
+              {loading ? "Loading..." : `Showing ${displayedCount} items`}
             </span>
           </div>
         </div>

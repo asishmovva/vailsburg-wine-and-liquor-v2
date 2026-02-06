@@ -27,16 +27,20 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const sort = searchParams.get("sort") as ProductSort | null;
+  const limit = parseNumber(searchParams.get("limit"));
 
   const filters: ProductFilters = {
     q: searchParams.get("q") ?? undefined,
     category: searchParams.get("category") ?? undefined,
     sub: searchParams.get("sub") ?? undefined,
+    size: searchParams.get("size") ?? undefined,
+    pack: searchParams.get("pack") ?? undefined,
     inStock: searchParams.get("inStock") === "1",
     sort: sort ?? undefined,
     min: parseNumber(searchParams.get("min")),
     max: parseNumber(searchParams.get("max")),
-    page: parseNumber(searchParams.get("page")),
+    page: searchParams.get("page") ?? undefined,
+    limit: typeof limit === "number" ? limit : undefined,
   };
 
   const result = await queryProducts(filters);

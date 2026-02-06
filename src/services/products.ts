@@ -1,10 +1,38 @@
-﻿import "server-only";
+import "server-only";
 
 import { adminDb } from "@/lib/firebaseAdmin";
 import { normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
 import type { Product, ProductFilters, ProductSort } from "@/services/productTypes";
+import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
 const DEFAULT_LIMIT = 48;
+const MAX_LIMIT = 72;
+
+type CursorPayload = {
+  lastId: string;
+  lastValue: string | number | null;
+};
+
+function encodeCursor(payload: CursorPayload) {
+  return Buffer.from(JSON.stringify(payload)).toString("base64");
+}
+
+function decodeCursor(cursor?: string) {
+  if (!cursor) return null;
+  try {
+    const decoded = JSON.parse(
+      Buffer.from(cursor, "base64").toString("utf8")
+    ) as CursorPayload;
+    if (!decoded || typeof decoded.lastId !== "string") return null;
+    return {
+      lastId: decoded.lastId,
+      lastValue:
+        decoded.lastValue === undefined ? null : decoded.lastValue,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function normalizeCategoryLabel(value?: string) {
   if (!value) return "";
@@ -54,6 +82,16 @@ export async function queryProducts(filters: ProductFilters) {
     query = query.where("subcategory", "==", subcategory);
   }
 
+  const size = filters.size?.trim();
+  if (size) {
+    query = query.where("size", "==", size);
+  }
+
+  const pack = filters.pack?.trim();
+  if (pack) {
+    query = query.where("pack", "==", pack);
+  }
+
   if (filters.inStock) {
     query = query.where("inStock", "==", true);
   }
@@ -63,15 +101,21 @@ export async function queryProducts(filters: ProductFilters) {
   const max = typeof filters.max === "number" ? filters.max : undefined;
   const sort = normalizeSort(filters.sort);
   let appliedSort = sort;
-  const page =
-    typeof filters.page === "number" && filters.page > 0 ? filters.page : 1;
+  const cursor = decodeCursor(filters.page);
+  const limit = Math.min(
+    Math.max(filters.limit ?? DEFAULT_LIMIT, 1),
+    MAX_LIMIT
+  );
+
+  let orderField: "nameLower" | "price" | "createdAt" = "nameLower";
+  let orderDirection: FirebaseFirestore.OrderByDirection = "asc";
 
   if (term) {
     // Prefix search on nameLower to avoid full collection scan.
     query = query
       .where("nameLower", ">=", term)
-      .where("nameLower", "<", `${term}\uf8ff`)
-      .orderBy("nameLower");
+      .where("nameLower", "<", `${term}\uf8ff`);
+    orderField = "nameLower";
   } else if (typeof min === "number" || typeof max === "number") {
     if (typeof min === "number") {
       query = query.where("price", ">=", min);
@@ -79,36 +123,56 @@ export async function queryProducts(filters: ProductFilters) {
     if (typeof max === "number") {
       query = query.where("price", "<=", max);
     }
-    const priceDirection = sort === "price_desc" ? "desc" : "asc";
-    query = query.orderBy("price", priceDirection);
+    orderField = "price";
+    orderDirection = sort === "price_desc" ? "desc" : "asc";
     appliedSort = sort;
   } else {
     switch (sort) {
       case "price_asc":
-        query = query.orderBy("price", "asc");
+        orderField = "price";
+        orderDirection = "asc";
         break;
       case "price_desc":
-        query = query.orderBy("price", "desc");
+        orderField = "price";
+        orderDirection = "desc";
         break;
       case "newest":
-        query = query.orderBy("createdAt", "desc");
+        orderField = "createdAt";
+        orderDirection = "desc";
         break;
       case "az":
       default:
-        query = query.orderBy("nameLower", "asc");
+        orderField = "nameLower";
+        orderDirection = "asc";
         break;
     }
   }
 
-  const offset = (page - 1) * DEFAULT_LIMIT;
-  if (offset > 0) {
-    query = query.offset(offset);
+  query = query.orderBy(orderField, orderDirection);
+  const docIdDirection: FirebaseFirestore.OrderByDirection =
+    orderDirection === "desc" ? "desc" : "asc";
+  query = query.orderBy(FieldPath.documentId(), docIdDirection);
+
+  if (cursor) {
+    let cursorValue:
+      | string
+      | number
+      | FirebaseFirestore.Timestamp
+      | null = cursor.lastValue;
+    if (orderField === "createdAt" && typeof cursorValue === "number") {
+      cursorValue = Timestamp.fromMillis(cursorValue);
+    }
+    query = query.startAfter(cursorValue, cursor.lastId);
   }
 
-  query = query.limit(DEFAULT_LIMIT);
+  query = query.limit(limit + 1);
 
   const snapshot = await query.get();
-  let items: Product[] = snapshot.docs.map((doc) => {
+  const hasMore = snapshot.docs.length > limit;
+  const pageDocs = hasMore ? snapshot.docs.slice(0, limit) : snapshot.docs;
+  const lastDoc = pageDocs[pageDocs.length - 1];
+
+  let items: Product[] = pageDocs.map((doc) => {
     const data = doc.data() as {
       name?: string;
       category?: string;
@@ -135,7 +199,8 @@ export async function queryProducts(filters: ProductFilters) {
       price: typeof data.price === "number" ? data.price : 0,
       image: data.image ?? "",
       stock: typeof data.stock === "number" ? data.stock : 0,
-      inStock: typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,
+      inStock:
+        typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,
       createdAt: data.createdAt?.toMillis?.() ?? null,
       size: data.size ?? "",
       pack: data.pack ?? "",
@@ -158,10 +223,26 @@ export async function queryProducts(filters: ProductFilters) {
     items = sortItems(items, sort);
   }
 
-  const hasMore = items.length === DEFAULT_LIMIT;
-  return {
-    items,
-    total: items.length,
-    nextPage: hasMore ? page + 1 : null,
-  };
+  let nextPage: string | null = null;
+  if (hasMore && lastDoc) {
+    const lastValueRaw = lastDoc.get(orderField) as
+      | string
+      | number
+      | FirebaseFirestore.Timestamp
+      | null
+      | undefined;
+    let lastValue: string | number | null = null;
+    if (lastValueRaw instanceof Timestamp) {
+      lastValue = lastValueRaw.toMillis();
+    } else if (
+      typeof lastValueRaw === "string" ||
+      typeof lastValueRaw === "number"
+    ) {
+      lastValue = lastValueRaw;
+    }
+
+    nextPage = encodeCursor({ lastId: lastDoc.id, lastValue });
+  }
+
+  return { items, total: items.length, nextPage };
 }
