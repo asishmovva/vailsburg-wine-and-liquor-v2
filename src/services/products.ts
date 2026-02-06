@@ -62,10 +62,9 @@ export async function queryProducts(filters: ProductFilters) {
   const min = typeof filters.min === "number" ? filters.min : undefined;
   const max = typeof filters.max === "number" ? filters.max : undefined;
   const sort = normalizeSort(filters.sort);
+  let appliedSort = sort;
   const page =
     typeof filters.page === "number" && filters.page > 0 ? filters.page : 1;
-
-  let appliedSort = sort;
 
   if (term) {
     // Prefix search on nameLower to avoid full collection scan.
@@ -159,5 +158,10 @@ export async function queryProducts(filters: ProductFilters) {
     items = sortItems(items, sort);
   }
 
-  return { items, total: items.length };
+  const hasMore = items.length === DEFAULT_LIMIT;
+  return {
+    items,
+    total: items.length,
+    nextPage: hasMore ? page + 1 : null,
+  };
 }

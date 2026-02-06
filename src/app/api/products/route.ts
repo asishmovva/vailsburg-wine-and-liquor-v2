@@ -1,6 +1,7 @@
-﻿import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { queryProducts } from "@/services/products";
 import type { ProductFilters, ProductSort } from "@/services/productTypes";
+import { rateLimit } from "@/lib/server/rateLimit";
 
 function parseNumber(value: string | null) {
   if (!value) return undefined;
@@ -8,7 +9,22 @@ function parseNumber(value: string | null) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-export async function GET(request: Request) {
+function getClientKey(request: NextRequest) {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) {
+    return forwarded.split(",")[0]?.trim() || "unknown";
+  }
+  const realIp = request.headers.get("x-real-ip");
+  return realIp?.trim() || "unknown";
+}
+
+export async function GET(request: NextRequest) {
+  const limited = rateLimit(`products:${getClientKey(request)}`, request, {
+    limit: 120,
+    windowMs: 60_000,
+  });
+  if (limited) return limited;
+
   const { searchParams } = new URL(request.url);
   const sort = searchParams.get("sort") as ProductSort | null;
 
