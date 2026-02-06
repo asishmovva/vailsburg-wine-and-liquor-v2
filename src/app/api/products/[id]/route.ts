@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProductById } from "@/services/product";
+import { getCachedProductById, loadProductById } from "@/services/product";
 import { rateLimit } from "@/lib/server/rateLimit";
 
 const PRODUCT_CACHE_HEADER =
@@ -20,14 +20,31 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const limited = rateLimit(`product:${getClientKey(request)}`, request, {
-    limit: 120,
-    windowMs: 60_000,
-  });
-  if (limited) return limited;
-
   const { id } = await params;
-  const product = await getProductById(id);
+  const cached = getCachedProductById(id);
+  if (cached) {
+    if (!cached.found) {
+      return NextResponse.json(
+        { message: "Not found" },
+        { status: 404, headers: { "Cache-Control": NOT_FOUND_CACHE_HEADER } }
+      );
+    }
+    return NextResponse.json(cached.data, {
+      headers: { "Cache-Control": PRODUCT_CACHE_HEADER },
+    });
+  }
+
+  const limitedAfterCache = rateLimit(
+    `product:${getClientKey(request)}`,
+    request,
+    {
+      limit: 120,
+      windowMs: 60_000,
+    }
+  );
+  if (limitedAfterCache) return limitedAfterCache;
+
+  const product = await loadProductById(id);
 
   if (!product) {
     return NextResponse.json(
