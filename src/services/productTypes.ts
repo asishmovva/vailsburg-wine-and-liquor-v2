@@ -4,11 +4,14 @@ export type ProductFilters = {
   q?: string;
   category?: string;
   sub?: string;
+  size?: string;
+  pack?: string;
   inStock?: boolean;
   min?: number;
   max?: number;
   sort?: ProductSort;
-  page?: number;
+  page?: string;
+  limit?: number;
 };
 
 export type Product = {
