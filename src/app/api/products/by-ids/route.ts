@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { rateLimit } from "@/lib/server/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +15,22 @@ function chunk<T>(items: T[], size: number) {
   return chunks;
 }
 
-export async function POST(request: Request) {
+function getClientKey(request: NextRequest) {
+  const forwarded = request.headers.get("x-forwarded-for");
+  if (forwarded) {
+    return forwarded.split(",")[0]?.trim() || "unknown";
+  }
+  const realIp = request.headers.get("x-real-ip");
+  return realIp?.trim() || "unknown";
+}
+
+export async function POST(request: NextRequest) {
+  const limited = rateLimit(`products-by-ids:${getClientKey(request)}`, request, {
+    limit: 60,
+    windowMs: 60_000,
+  });
+  if (limited) return limited;
+
   let body: Body = {};
   try {
     body = (await request.json()) as Body;

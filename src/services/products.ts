@@ -4,8 +4,6 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
 import type { Product, ProductFilters, ProductSort } from "@/services/productTypes";
 
-const DEFAULT_LIMIT = 48;
-
 function normalizeCategoryLabel(value?: string) {
   if (!value) return "";
   const normalized = normalizeCategory(value);
@@ -62,9 +60,6 @@ export async function queryProducts(filters: ProductFilters) {
   const min = typeof filters.min === "number" ? filters.min : undefined;
   const max = typeof filters.max === "number" ? filters.max : undefined;
   const sort = normalizeSort(filters.sort);
-  const page =
-    typeof filters.page === "number" && filters.page > 0 ? filters.page : 1;
-
   let appliedSort = sort;
 
   if (term) {
@@ -100,13 +95,6 @@ export async function queryProducts(filters: ProductFilters) {
         break;
     }
   }
-
-  const offset = (page - 1) * DEFAULT_LIMIT;
-  if (offset > 0) {
-    query = query.offset(offset);
-  }
-
-  query = query.limit(DEFAULT_LIMIT);
 
   const snapshot = await query.get();
   let items: Product[] = snapshot.docs.map((doc) => {

@@ -73,6 +73,7 @@ export function ShopProductCard({
         <Link
           href={`/product/${product.id}`}
           className="block overflow-hidden rounded-2xl"
+          prefetch={false}
         >
           {product.image ? (
             <div
@@ -108,7 +109,11 @@ export function ShopProductCard({
       </div>
 
       <div className="flex flex-1 flex-col gap-2">
-        <Link href={`/product/${product.id}`} className="space-y-1">
+        <Link
+          href={`/product/${product.id}`}
+          className="space-y-1"
+          prefetch={false}
+        >
           <p className="text-sm font-semibold text-zinc-900">
             {product.name}
           </p>
