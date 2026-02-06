@@ -75,6 +75,25 @@ Sypram sync runs server-side only and is guarded by a 30-minute cooldown.
 
 POS order push was canceled due to vendor cost. Orders are website-only and will be confirmed via Stripe webhooks (Phase 12).
 
+## Order alerts email (SMTP)
+
+Set these in `.env.local` to enable staff email alerts for new orders:
+
+```
+EMAIL_PROVIDER=smtp
+ORDERS_EMAIL_ENABLED=true
+STORE_ORDERS_EMAIL_TO=store@email.com
+STORE_ORDERS_EMAIL_FROM=yourstore@gmail.com
+
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=yourstore@gmail.com
+SMTP_PASS=GMAIL_APP_PASSWORD
+```
+
+For Gmail/Workspace, create an App Password (Google Account > Security > App passwords) and use it as `SMTP_PASS`.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

@@ -23,6 +23,9 @@ importers:
       next:
         specifier: 16.1.4
         version: 16.1.4(@babel/core@7.28.6)(@opentelemetry/api@1.9.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      nodemailer:
+        specifier: ^8.0.0
+        version: 8.0.0
       react:
         specifier: 19.2.3
         version: 19.2.3
@@ -39,6 +42,9 @@ importers:
       '@types/node':
         specifier: ^20
         version: 20.19.30
+      '@types/nodemailer':
+        specifier: ^7.0.9
+        version: 7.0.9
       '@types/react':
         specifier: ^19
         version: 19.2.9
@@ -868,6 +874,9 @@ packages:
 
   '@types/node@22.19.7':
     resolution: {integrity: sha512-MciR4AKGHWl7xwxkBa6xUGxQJ4VBOmPTF7sL+iGzuahOFaO0jHCsuEfS80pan1ef4gWId1oWOweIhrDEYLuaOw==}
+
+  '@types/nodemailer@7.0.9':
+    resolution: {integrity: sha512-vI8oF1M+8JvQhsId0Pc38BdUP2evenIIys7c7p+9OZXSPOH5c1dyINP1jT8xQ2xPuBUXmIC87s+91IZMDjH8Ow==}
 
   '@types/react-dom@19.2.3':
     resolution: {integrity: sha512-jp2L/eY6fn+KgVVQAOqYItbF0VY/YApe5Mz2F0aykSO8gx31bYCZyvSeYxCHKvzHG5eZjc+zyaS5BrBWya2+kQ==}
@@ -2130,6 +2139,10 @@ packages:
 
   node-releases@2.0.27:
     resolution: {integrity: sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA==}
+
+  nodemailer@8.0.0:
+    resolution: {integrity: sha512-xvVJf/f0bzmNpnRIbhCp/IKxaHgJ6QynvUbLXzzMRPG3LDQr5oXkYuw4uDFyFYs8cge8agwwrJAXZsd4hhMquw==}
+    engines: {node: '>=6.0.0'}
 
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
@@ -3572,6 +3585,10 @@ snapshots:
   '@types/node@22.19.7':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/nodemailer@7.0.9':
+    dependencies:
+      '@types/node': 20.19.30
 
   '@types/react-dom@19.2.3(@types/react@19.2.9)':
     dependencies:
@@ -5079,6 +5096,8 @@ snapshots:
   node-forge@1.3.3: {}
 
   node-releases@2.0.27: {}
+
+  nodemailer@8.0.0: {}
 
   object-assign@4.1.1: {}
 

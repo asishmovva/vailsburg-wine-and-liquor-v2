@@ -107,6 +107,8 @@ export default function AdminOrdersClient() {
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [lastPollAt, setLastPollAt] = useState<Date | null>(null);
+  const [pollStale, setPollStale] = useState(false);
   const [search, setSearch] = useState("");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<OrderRecord | null>(null);
@@ -121,6 +123,7 @@ export default function AdminOrdersClient() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const knownIdsRef = useRef<Set<string>>(new Set());
   const initialLoadedRef = useRef(false);
+  const lastStaleAlertRef = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -217,6 +220,7 @@ export default function AdminOrdersClient() {
     } catch (err) {
       setError((err as Error).message ?? "Unable to load orders.");
     } finally {
+      setLastPollAt(new Date());
       setLoadingOrders(false);
     }
   }, [activeStatus, alertsEnabled, notificationStatus, playBeep, user]);
@@ -228,6 +232,37 @@ export default function AdminOrdersClient() {
     const interval = setInterval(fetchOrders, 15000);
     return () => clearInterval(interval);
   }, [fetchOrders, role, roleLoading, user]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!lastPollAt) {
+        setPollStale(false);
+        return;
+      }
+      const stale = Date.now() - lastPollAt.getTime() > 45000;
+      setPollStale(stale);
+      if (stale && alertsEnabled && !alertsMuted) {
+        const now = Date.now();
+        if (now - lastStaleAlertRef.current > 30000) {
+          playBeep();
+          lastStaleAlertRef.current = now;
+        }
+      }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [alertsEnabled, alertsMuted, lastPollAt, playBeep]);
+
+  const handleTestAlert = async () => {
+    if (!alertsEnabled) {
+      await enableAlerts();
+    }
+    if (notificationStatus === "granted") {
+      new Notification("Order alerts test", {
+        body: "Notifications are enabled for new orders.",
+      });
+    }
+    playBeep();
+  };
 
   const handleStatusChange = async (
     orderId: string,
@@ -364,18 +399,34 @@ export default function AdminOrdersClient() {
           </Button>
           <Button
             variant="outline"
+            onClick={handleTestAlert}
+            disabled={notificationStatus === "unsupported"}
+          >
+            Test alert
+          </Button>
+          <Button
+            variant="outline"
             onClick={() => setAlertsMuted((prev) => !prev)}
             disabled={!alertsEnabled}
           >
             {alertsMuted ? "Unmute" : "Mute"}
           </Button>
         </div>
+        <p className="text-xs text-zinc-500">
+          Notification permission: {notificationStatus}
+        </p>
         {notificationStatus === "denied" ? (
           <p className="text-xs text-amber-600">
             Notifications are blocked in your browser settings.
           </p>
         ) : null}
       </Card>
+
+      {pollStale ? (
+        <Card className="border-red-200 bg-red-50 text-sm text-red-700">
+          Updates paused—refresh tab.
+        </Card>
+      ) : null}
 
       {loadingOrders ? (
         <Card className="p-6 text-sm text-zinc-600">Loading orders...</Card>
