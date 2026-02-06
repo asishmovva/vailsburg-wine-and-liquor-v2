@@ -4,6 +4,8 @@ import { adminDb } from "@/lib/firebaseAdmin";
 import { normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
 import type { Product, ProductFilters, ProductSort } from "@/services/productTypes";
 
+const DEFAULT_LIMIT = 48;
+
 function normalizeCategoryLabel(value?: string) {
   if (!value) return "";
   const normalized = normalizeCategory(value);
@@ -61,6 +63,8 @@ export async function queryProducts(filters: ProductFilters) {
   const max = typeof filters.max === "number" ? filters.max : undefined;
   const sort = normalizeSort(filters.sort);
   let appliedSort = sort;
+  const page =
+    typeof filters.page === "number" && filters.page > 0 ? filters.page : 1;
 
   if (term) {
     // Prefix search on nameLower to avoid full collection scan.
@@ -95,6 +99,13 @@ export async function queryProducts(filters: ProductFilters) {
         break;
     }
   }
+
+  const offset = (page - 1) * DEFAULT_LIMIT;
+  if (offset > 0) {
+    query = query.offset(offset);
+  }
+
+  query = query.limit(DEFAULT_LIMIT);
 
   const snapshot = await query.get();
   let items: Product[] = snapshot.docs.map((doc) => {
@@ -147,5 +158,10 @@ export async function queryProducts(filters: ProductFilters) {
     items = sortItems(items, sort);
   }
 
-  return { items, total: items.length };
+  const hasMore = items.length === DEFAULT_LIMIT;
+  return {
+    items,
+    total: items.length,
+    nextPage: hasMore ? page + 1 : null,
+  };
 }
