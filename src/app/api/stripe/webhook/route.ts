@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { sendEmail } from "@/lib/email";
+import { buildNewOrderEmail, type OrderEmailData } from "@/lib/email/orders";
 import { getStripe } from "@/lib/stripe";
 import { ORDER_STATUSES } from "@/lib/orders/status";
 
@@ -10,9 +12,22 @@ export const dynamic = "force-dynamic";
 type OrderData = {
   status?: string;
   userId?: string | null;
-  items?: Array<{ productId: string; qty: number }>;
+  items?: Array<{
+    productId: string;
+    name?: string;
+    price?: number;
+    qty: number;
+  }>;
   total?: number;
+  subtotal?: number;
+  tax?: number;
+  tip?: number;
   fulfillment?: "delivery" | "pickup";
+  delivery?: { address?: string; miles?: number; eligible?: boolean } | null;
+  email?: string | null;
+  phone?: string | null;
+  customer?: { name?: string | null; phone?: string | null; email?: string | null };
+  alerts?: { emailSentAt?: unknown; emailLastError?: string | null };
   createdAt?: unknown;
   stripe?: { paymentIntentId?: string; checkoutSessionId?: string };
 };
@@ -26,6 +41,87 @@ function buildPointer(orderId: string, order: OrderData) {
     createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   };
+}
+
+async function maybeSendNewOrderEmail({
+  orderId,
+  orderData,
+  orderRef,
+}: {
+  orderId: string;
+  orderData: OrderData;
+  orderRef: FirebaseFirestore.DocumentReference;
+}) {
+  if (process.env.ORDERS_EMAIL_ENABLED !== "true") return;
+  if (orderData.alerts?.emailSentAt) {
+    console.log("[orders_email_skipped_duplicate]", { orderId });
+    return;
+  }
+
+  const to = process.env.STORE_ORDERS_EMAIL_TO ?? "";
+  const from = process.env.STORE_ORDERS_EMAIL_FROM ?? "";
+  if (!to || !from) {
+    console.log("[orders_email_error]", { orderId, reason: "missing_email_env" });
+    return;
+  }
+
+  const emailPayload = buildNewOrderEmail({
+    id: orderId,
+    fulfillment: orderData.fulfillment,
+    delivery: orderData.delivery ?? null,
+    subtotal: orderData.subtotal,
+    tax: orderData.tax,
+    tip: orderData.tip,
+    total: orderData.total,
+    createdAt: orderData.createdAt,
+    email: orderData.email,
+    phone: orderData.phone,
+    customer: orderData.customer,
+    items: (orderData.items ?? []).map((item) => ({
+      name: item.name ?? "Item",
+      qty: item.qty,
+      price: item.price,
+    })) as OrderEmailData["items"],
+  });
+
+  const result = await sendEmail({
+    to,
+    from,
+    subject: emailPayload.subject,
+    text: emailPayload.text,
+    html: emailPayload.html,
+  });
+
+  if (result.ok) {
+    try {
+      await orderRef.update({
+        "alerts.emailSentAt": FieldValue.serverTimestamp(),
+        "alerts.emailLastError": FieldValue.delete(),
+      });
+      console.log("[orders_email_sent]", { orderId });
+    } catch (error) {
+      console.log("[orders_email_error]", {
+        orderId,
+        reason: (error as Error).message,
+      });
+    }
+    return;
+  }
+
+  try {
+    await orderRef.update({
+      "alerts.emailLastError": result.error ?? "smtp_failed",
+    });
+  } catch (error) {
+    console.log("[orders_email_error]", {
+      orderId,
+      reason: (error as Error).message,
+    });
+  }
+  console.log("[orders_email_error]", {
+    orderId,
+    reason: result.error ?? "smtp_failed",
+  });
 }
 
 export async function POST(request: Request) {
@@ -213,6 +309,8 @@ export async function POST(request: Request) {
       }
     });
 
+    await maybeSendNewOrderEmail({ orderId, orderData, orderRef });
+
     console.log("[stripe:webhook] order_created", {
       orderId,
       eventType,
@@ -317,6 +415,8 @@ export async function POST(request: Request) {
         });
       }
     });
+
+    await maybeSendNewOrderEmail({ orderId, orderData, orderRef });
 
     console.log("[stripe:webhook] order_created", {
       orderId,
