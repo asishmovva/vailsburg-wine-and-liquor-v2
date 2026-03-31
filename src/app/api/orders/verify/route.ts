@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
+import { maybeSendCustomerOrderEmail } from "@/lib/email/orderNotifications";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { getStripe } from "@/lib/stripe";
 import { FINAL_ORDER_STATUSES, ORDER_STATUSES } from "@/lib/orders/status";
@@ -10,10 +11,27 @@ export const dynamic = "force-dynamic";
 type OrderData = {
   status?: string;
   userId?: string | null;
-  items?: Array<{ productId: string; qty: number }>;
+  items?: Array<{
+    productId: string;
+    qty: number;
+    name?: string;
+    price?: number;
+    image?: string | null;
+    category?: string;
+  }>;
   total?: number;
   fulfillment?: "delivery" | "pickup";
   createdAt?: unknown;
+  updatedAt?: unknown;
+  paidAt?: unknown;
+  email?: string | null;
+  phone?: string | null;
+  customer?: { name?: string | null; phone?: string | null; email?: string | null };
+  delivery?: { address?: string; miles?: number; eligible?: boolean } | null;
+  subtotal?: number;
+  tax?: number;
+  tip?: number;
+  notifications?: Record<string, unknown> | null;
   stripe?: {
     paymentIntentId?: string;
     checkoutSessionId?: string;
@@ -161,12 +179,24 @@ export async function GET(request: Request) {
           status: ORDER_STATUSES.NEW,
           total: order.total ?? 0,
           fulfillment: order.fulfillment ?? "pickup",
+          items: order.items ?? [],
           createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
     }
+  });
+
+  await maybeSendCustomerOrderEmail({
+    orderId,
+    order: {
+      ...order,
+      id: orderId,
+      status: ORDER_STATUSES.NEW,
+    },
+    orderRef,
+    milestone: "orderReceived",
   });
 
   console.log("[orders:verify]", {

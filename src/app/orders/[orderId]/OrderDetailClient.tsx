@@ -2,38 +2,40 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { OrderStatusBadge } from "@/components/orders/OrderStatusBadge";
+import { OrderSummaryCard } from "@/components/orders/OrderSummaryCard";
+import { OrderTimeline } from "@/components/orders/OrderTimeline";
 import { Card } from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
-import { OrderDetails, type OrderRecord } from "@/components/orders/OrderDetails";
 import { ORDER_STATUSES } from "@/lib/orders/status";
+import {
+  getCustomerStatusMeta,
+  normalizeOrderStatus,
+} from "@/lib/orders/statusDisplay";
+import type { OrderRecord } from "@/lib/orders/types";
 import { orderNumberFromId } from "@/utils/order";
 
-const STATUS_LABELS: Record<string, string> = {
-  [ORDER_STATUSES.PENDING_PAYMENT]: "Payment pending",
-  [ORDER_STATUSES.NEW]: "New",
-  [ORDER_STATUSES.ACCEPTED]: "Accepted",
-  [ORDER_STATUSES.READY]: "Ready",
-  [ORDER_STATUSES.COMPLETED]: "Completed",
-  [ORDER_STATUSES.CANCELLED]: "Cancelled",
-  [ORDER_STATUSES.FAILED]: "Failed",
-};
-
-function normalizeStatus(status?: string) {
-  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
-  switch (status) {
-    case "payment_pending":
-      return ORDER_STATUSES.PENDING_PAYMENT;
-    case "paid":
-      return ORDER_STATUSES.NEW;
-    case "fulfilled":
-      return ORDER_STATUSES.COMPLETED;
-    case "cancelled":
-      return ORDER_STATUSES.CANCELLED;
-    case "failed":
-      return ORDER_STATUSES.FAILED;
-    default:
-      return status;
+function getFulfillmentMessage(order: OrderRecord) {
+  if (order.fulfillment === "delivery") {
+        return {
+          title: "Delivery details",
+          lines: [
+            order.delivery?.address ?? "Delivery address unavailable.",
+            order.delivery?.miles
+              ? `${order.delivery.miles.toFixed(1)} miles from store`
+              : "Same-day delivery requested.",
+            "We'll notify you when your order is on the way.",
+          ],
+        };
   }
+
+  return {
+    title: "Pickup details",
+    lines: [
+      "We'll notify you when your order is ready for pickup.",
+      "Bring your order confirmation and a valid ID at pickup.",
+    ],
+  };
 }
 
 export default function OrderDetailClient({ orderId }: { orderId: string }) {
@@ -123,18 +125,24 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
     );
   }
 
-  const normalizedStatus = normalizeStatus(order?.status);
-  const statusLabel = STATUS_LABELS[normalizedStatus] ?? "Processing";
+  const statusMeta = getCustomerStatusMeta(order);
+  const normalizedStatus = normalizeOrderStatus(order.status);
+  const fulfillmentMessage = getFulfillmentMessage(order);
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
+      <div className="space-y-3">
         <h1 className="text-2xl font-semibold text-zinc-900">
           Order #{orderNumberFromId(orderId)}
         </h1>
-        <p className="text-sm text-zinc-600">
-          Status: {statusLabel}
-        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <OrderStatusBadge
+            status={order.status}
+            fulfillment={order.fulfillment}
+            fulfillmentStatus={order.fulfillmentStatus}
+          />
+          <p className="text-sm text-zinc-600">{statusMeta.hint}</p>
+        </div>
         <Link
           href="/orders"
           className="text-sm text-zinc-600 underline-offset-4 hover:underline"
@@ -143,7 +151,48 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
         </Link>
       </div>
 
-      <OrderDetails order={order} />
+      {normalizedStatus === ORDER_STATUSES.CANCELLED ? (
+        <Card className="border-red-200 bg-red-50 text-sm text-red-700">
+          This order was cancelled.
+          {order.cancellationReason ? ` Reason: ${order.cancellationReason}` : ""}
+        </Card>
+      ) : null}
+
+      {normalizedStatus === ORDER_STATUSES.FAILED ? (
+        <Card className="border-red-200 bg-red-50 text-sm text-red-700">
+          Payment failed for this order. If you still want these items, place the
+          order again from the shop.
+        </Card>
+      ) : null}
+
+      {normalizedStatus === "refunded" ? (
+        <Card className="border-zinc-200 bg-zinc-50 text-sm text-zinc-700">
+          A refund has been issued for this order.
+        </Card>
+      ) : null}
+
+      <Card className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-zinc-900">Order timeline</h2>
+          <p className="text-sm text-zinc-600">
+            Track each milestone as your order moves forward.
+          </p>
+        </div>
+        <OrderTimeline order={order} />
+      </Card>
+
+      <Card className="space-y-3">
+        <h2 className="text-lg font-semibold text-zinc-900">
+          {fulfillmentMessage.title}
+        </h2>
+        {fulfillmentMessage.lines.map((line) => (
+          <p key={line} className="text-sm text-zinc-600">
+            {line}
+          </p>
+        ))}
+      </Card>
+
+      <OrderSummaryCard order={order} />
     </div>
   );
 }

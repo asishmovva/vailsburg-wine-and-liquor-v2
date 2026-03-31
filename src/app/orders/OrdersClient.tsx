@@ -1,87 +1,39 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { collection, onSnapshot, orderBy, query, type Timestamp } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { RequireAuth } from "@/components/auth/RequireAuth";
+import { OrderStatusBadge } from "@/components/orders/OrderStatusBadge";
 import { Card } from "@/components/ui/Card";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { db } from "@/lib/firebase";
-import { ORDER_STATUSES } from "@/lib/orders/status";
+import { getCustomerStatusMeta } from "@/lib/orders/statusDisplay";
+import type { OrderItem, OrderListRecord } from "@/lib/orders/types";
 import { formatOrderDate, orderNumberFromId } from "@/utils/order";
 
-type OrderPointer = {
-  orderId: string;
-  status?: string;
-  total?: number;
-  fulfillment?: "delivery" | "pickup";
+type OrderPointer = OrderListRecord & {
   createdAt?: Timestamp;
 };
 
-type OrderItem = {
-  productId: string;
-  name: string;
-  price: number;
-  qty: number;
-  image?: string | null;
-  category?: string;
-};
-
-const STATUS_STYLES: Record<string, string> = {
-  [ORDER_STATUSES.PENDING_PAYMENT]: "bg-amber-100 text-amber-700",
-  [ORDER_STATUSES.NEW]: "bg-emerald-100 text-emerald-700",
-  [ORDER_STATUSES.ACCEPTED]: "bg-blue-100 text-blue-700",
-  [ORDER_STATUSES.READY]: "bg-indigo-100 text-indigo-700",
-  [ORDER_STATUSES.COMPLETED]: "bg-zinc-200 text-zinc-700",
-  [ORDER_STATUSES.CANCELLED]: "bg-zinc-200 text-zinc-700",
-  [ORDER_STATUSES.FAILED]: "bg-red-100 text-red-700",
-  paid: "bg-emerald-100 text-emerald-700",
-  payment_pending: "bg-amber-100 text-amber-700",
-  fulfilled: "bg-zinc-200 text-zinc-700",
-  cancelled: "bg-zinc-200 text-zinc-700",
-  failed: "bg-red-100 text-red-700",
-};
-
-const STATUS_LABELS: Record<string, string> = {
-  [ORDER_STATUSES.PENDING_PAYMENT]: "Payment pending",
-  [ORDER_STATUSES.NEW]: "New",
-  [ORDER_STATUSES.ACCEPTED]: "Accepted",
-  [ORDER_STATUSES.READY]: "Ready",
-  [ORDER_STATUSES.COMPLETED]: "Completed",
-  [ORDER_STATUSES.CANCELLED]: "Cancelled",
-  [ORDER_STATUSES.FAILED]: "Failed",
-};
-
-function normalizeStatus(status?: string) {
-  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
-  switch (status) {
-    case "payment_pending":
-      return ORDER_STATUSES.PENDING_PAYMENT;
-    case "paid":
-      return ORDER_STATUSES.NEW;
-    case "fulfilled":
-      return ORDER_STATUSES.COMPLETED;
-    case "cancelled":
-      return ORDER_STATUSES.CANCELLED;
-    case "failed":
-      return ORDER_STATUSES.FAILED;
-    default:
-      return status;
+function buildItemPreview(items?: OrderItem[]) {
+  if (!items || items.length === 0) {
+    return { count: 0, summary: "Item summary available on order details." };
   }
-}
 
-function StatusPill({ status }: { status?: string }) {
-  const normalized = normalizeStatus(status);
-  const label = STATUS_LABELS[normalized] ?? "Processing";
-  const classes = STATUS_STYLES[normalized] ?? "bg-zinc-100 text-zinc-600";
-  return (
-    <span className={`rounded-full px-3 py-1 text-xs font-medium ${classes}`}>
-      {label}
-    </span>
-  );
+  const itemCount = items.reduce((sum, item) => sum + Math.max(item.qty, 0), 0);
+  const names = items.map((item) => item.name).filter(Boolean);
+  const preview = names.slice(0, 2).join(", ");
+  const remainder = Math.max(itemCount - 2, 0);
+
+  return {
+    count: itemCount,
+    summary:
+      remainder > 0 ? `${itemCount} items • ${preview}, +${remainder} more` : `${itemCount} items • ${preview}`,
+  };
 }
 
 function OrdersContent() {
@@ -122,6 +74,10 @@ function OrdersContent() {
 
     return () => unsubscribe();
   }, [user]);
+
+  const hasOrders = orders.length > 0;
+
+  const filteredOrders = useMemo(() => orders, [orders]);
 
   const handleReorder = async (orderId: string) => {
     if (!user || !db || !orderId) return;
@@ -246,26 +202,43 @@ function OrdersContent() {
     );
   }
 
-  if (orders.length === 0) {
+  if (!hasOrders) {
     return (
       <Card className="flex flex-col items-center gap-4 text-center">
-        <p className="text-sm text-zinc-600">No orders yet.</p>
-        <Link
-          href="/shop"
-          className="inline-flex h-11 items-center justify-center rounded-full bg-zinc-900 px-5 text-sm font-medium text-white hover:bg-zinc-800"
-        >
-          Start shopping
-        </Link>
+        <p className="text-sm text-zinc-600">
+          You haven&apos;t placed any orders yet.
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/shop"
+            className="inline-flex h-11 items-center justify-center rounded-full bg-zinc-900 px-5 text-sm font-medium text-white hover:bg-zinc-800"
+          >
+            Shop now
+          </Link>
+          <Link
+            href="/"
+            className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-medium text-zinc-900 hover:border-zinc-400"
+          >
+            Browse deals
+          </Link>
+        </div>
       </Card>
     );
   }
 
   return (
     <div className="space-y-4">
-      {orders.map((order) => (
+      {filteredOrders.map((order) => {
+        const statusMeta = getCustomerStatusMeta({
+          status: order.status,
+          fulfillment: order.fulfillment ?? "pickup",
+        });
+        const preview = buildItemPreview(order.items);
+
+        return (
         <Card key={order.orderId} className="space-y-4 p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+            <div className="space-y-1">
               <p className="text-sm text-zinc-500">Order</p>
               <p className="text-lg font-semibold text-zinc-900">
                 #{orderNumberFromId(order.orderId)}
@@ -273,18 +246,25 @@ function OrdersContent() {
               <p className="text-xs text-zinc-500">
                 {formatOrderDate(order.createdAt)}
               </p>
+              <p className="text-xs text-zinc-500">{statusMeta.hint}</p>
             </div>
-            <StatusPill status={order.status} />
+            <OrderStatusBadge
+              status={order.status}
+              fulfillment={order.fulfillment ?? "pickup"}
+            />
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-4 text-sm text-zinc-600">
             <span className="capitalize">
               {order.fulfillment ?? "pickup"}
             </span>
+            <span>{preview.count > 0 ? `${preview.count} items` : "Order details available"}</span>
             <span className="font-semibold text-zinc-900">
               ${Number(order.total ?? 0).toFixed(2)}
             </span>
           </div>
+
+          <p className="text-sm text-zinc-600">{preview.summary}</p>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Link
@@ -303,7 +283,7 @@ function OrdersContent() {
             </button>
           </div>
         </Card>
-      ))}
+      )})}
     </div>
   );
 }
