@@ -316,45 +316,47 @@ export default function AdminOrdersClient() {
     return () => clearTimeout(timeout);
   }, [pendingAction]);
 
-  const handleStatusChange = async (
-    orderId: string,
-    status: string,
-    reason?: string
-  ) => {
-    if (!user) return;
-    setUpdatingId(orderId);
-    try {
-      const token = await user.getIdToken();
-      const response = await fetch(`/api/admin/orders/${orderId}/status`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ status, reason }),
-      });
-      if (!response.ok) {
-        const payload = (await response.json()) as { error?: string };
-        throw new Error(payload.error ?? "Unable to update status.");
+  const handleStatusChange = useCallback(
+    async (orderId: string, status: string, reason?: string) => {
+      if (!user) return;
+      setUpdatingId(orderId);
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch(`/api/admin/orders/${orderId}/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ status, reason }),
+        });
+        if (!response.ok) {
+          const payload = (await response.json()) as { error?: string };
+          throw new Error(payload.error ?? "Unable to update status.");
+        }
+        setOrders((prev) =>
+          prev.map((order) =>
+            order.id === orderId
+              ? {
+                  ...order,
+                  status,
+                  cancellationReason:
+                    status === ORDER_STATUSES.CANCELLED
+                      ? reason ?? order.cancellationReason ?? null
+                      : order.cancellationReason,
+                }
+              : order
+          )
+        );
+        toast.success(`Order ${STATUS_LABELS[status] ?? status}`);
+      } catch (err) {
+        toast.error((err as Error).message ?? "Unable to update order.");
+      } finally {
+        setUpdatingId(null);
       }
-      setOrders((prev) =>
-        prev.map((order) =>
-          order.id === orderId
-            ? {
-                ...order,
-                status,
-                cancellationReason: status === ORDER_STATUSES.CANCELLED ? reason ?? order.cancellationReason ?? null : order.cancellationReason,
-              }
-            : order
-        )
-      );
-      toast.success(`Order ${STATUS_LABELS[status] ?? status}`);
-    } catch (err) {
-      toast.error((err as Error).message ?? "Unable to update order.");
-    } finally {
-      setUpdatingId(null);
-    }
-  };
+    },
+    [user]
+  );
 
   const handleCancelConfirm = async () => {
     if (!cancelTarget) return;
