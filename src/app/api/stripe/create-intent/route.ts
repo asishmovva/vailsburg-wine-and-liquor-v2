@@ -425,6 +425,7 @@ export async function POST(request: Request) {
           status: ORDER_STATUSES.PENDING_PAYMENT,
           total: totalCents / 100,
           fulfillment,
+          items: orderItems,
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });

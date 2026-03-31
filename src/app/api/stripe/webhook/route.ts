@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { sendEmail } from "@/lib/email";
+import { maybeSendCustomerOrderEmail } from "@/lib/email/orderNotifications";
 import { buildNewOrderEmail, type OrderEmailData } from "@/lib/email/orders";
 import { getStripe } from "@/lib/stripe";
 import { ORDER_STATUSES } from "@/lib/orders/status";
@@ -17,6 +18,8 @@ type OrderData = {
     name?: string;
     price?: number;
     qty: number;
+    image?: string | null;
+    category?: string;
   }>;
   total?: number;
   subtotal?: number;
@@ -28,7 +31,16 @@ type OrderData = {
   phone?: string | null;
   customer?: { name?: string | null; phone?: string | null; email?: string | null };
   alerts?: { emailSentAt?: unknown; emailLastError?: string | null };
+  notifications?: {
+    orderReceivedSentAt?: unknown;
+    readySentAt?: unknown;
+    outForDeliverySentAt?: unknown;
+    cancelledSentAt?: unknown;
+    emailLastError?: string | null;
+  };
   createdAt?: unknown;
+  updatedAt?: unknown;
+  paidAt?: unknown;
   stripe?: { paymentIntentId?: string; checkoutSessionId?: string };
 };
 
@@ -40,6 +52,7 @@ function buildPointer(orderId: string, order: OrderData) {
     fulfillment: order.fulfillment ?? "pickup",
     createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
+    items: order.items ?? [],
   };
 }
 
@@ -309,7 +322,25 @@ export async function POST(request: Request) {
       }
     });
 
-    await maybeSendNewOrderEmail({ orderId, orderData, orderRef });
+    const refreshedOrderData: OrderData & { id: string } = {
+      id: orderId,
+      ...orderData,
+      status: ORDER_STATUSES.NEW,
+      paidAt: orderData.paidAt ?? FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      stripe: {
+        paymentIntentId: intentId ?? undefined,
+        checkoutSessionId: session.id,
+      },
+    };
+
+    await maybeSendNewOrderEmail({ orderId, orderData: refreshedOrderData, orderRef });
+    await maybeSendCustomerOrderEmail({
+      orderId,
+      order: refreshedOrderData,
+      orderRef,
+      milestone: "orderReceived",
+    });
 
     console.log("[stripe:webhook] order_created", {
       orderId,
@@ -416,7 +447,24 @@ export async function POST(request: Request) {
       }
     });
 
-    await maybeSendNewOrderEmail({ orderId, orderData, orderRef });
+    const refreshedOrderData: OrderData & { id: string } = {
+      id: orderId,
+      ...orderData,
+      status: ORDER_STATUSES.NEW,
+      paidAt: orderData.paidAt ?? FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      stripe: {
+        paymentIntentId: intent.id,
+      },
+    };
+
+    await maybeSendNewOrderEmail({ orderId, orderData: refreshedOrderData, orderRef });
+    await maybeSendCustomerOrderEmail({
+      orderId,
+      order: refreshedOrderData,
+      orderRef,
+      milestone: "orderReceived",
+    });
 
     console.log("[stripe:webhook] order_created", {
       orderId,
@@ -456,6 +504,7 @@ export async function POST(request: Request) {
                   status: ORDER_STATUSES.FAILED,
                   total: orderData.total ?? 0,
                   fulfillment: orderData.fulfillment ?? "pickup",
+                  items: orderData.items ?? [],
                   createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),
                   updatedAt: FieldValue.serverTimestamp(),
                 },
@@ -498,6 +547,7 @@ export async function POST(request: Request) {
                   status: ORDER_STATUSES.CANCELLED,
                   total: orderData.total ?? 0,
                   fulfillment: orderData.fulfillment ?? "pickup",
+                  items: orderData.items ?? [],
                   createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),
                   updatedAt: FieldValue.serverTimestamp(),
                 },

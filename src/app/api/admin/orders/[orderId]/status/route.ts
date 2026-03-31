@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { maybeSendCustomerOrderEmail } from "@/lib/email/orderNotifications";
 import { ORDER_STATUSES } from "@/lib/orders/status";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 
@@ -52,6 +53,23 @@ export async function POST(
     total?: number;
     fulfillment?: "delivery" | "pickup";
     createdAt?: unknown;
+    status?: string;
+    email?: string | null;
+    phone?: string | null;
+    customer?: { name?: string | null; phone?: string | null; email?: string | null };
+    delivery?: { address?: string; miles?: number; eligible?: boolean } | null;
+    subtotal?: number;
+    tax?: number;
+    tip?: number;
+    items?: Array<{
+      productId: string;
+      name?: string;
+      price?: number;
+      qty: number;
+      image?: string | null;
+      category?: string;
+    }>;
+    notifications?: Record<string, unknown> | null;
   };
 
   if (nextStatus === ORDER_STATUSES.CANCELLED && !reason) {
@@ -80,11 +98,41 @@ export async function POST(
           status: nextStatus,
           total: orderData.total ?? 0,
           fulfillment: orderData.fulfillment ?? "pickup",
+          items: orderData.items ?? [],
           createdAt: orderData.createdAt ?? FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         },
         { merge: true }
       );
+  }
+
+  if (nextStatus === ORDER_STATUSES.READY) {
+    await maybeSendCustomerOrderEmail({
+      orderId,
+      order: {
+        ...orderData,
+        id: orderId,
+        status: nextStatus,
+        cancellationReason: null,
+      },
+      orderRef,
+      milestone:
+        orderData.fulfillment === "delivery" ? "outForDelivery" : "ready",
+    });
+  }
+
+  if (nextStatus === ORDER_STATUSES.CANCELLED) {
+    await maybeSendCustomerOrderEmail({
+      orderId,
+      order: {
+        ...orderData,
+        id: orderId,
+        status: nextStatus,
+        cancellationReason: reason ?? null,
+      },
+      orderRef,
+      milestone: "cancelled",
+    });
   }
 
   return NextResponse.json({ ok: true, status: nextStatus });

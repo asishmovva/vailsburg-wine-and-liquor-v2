@@ -3,10 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { OrderStatusBadge } from "@/components/orders/OrderStatusBadge";
+import { OrderSummaryCard } from "@/components/orders/OrderSummaryCard";
+import { OrderTimeline } from "@/components/orders/OrderTimeline";
 import { Card } from "@/components/ui/Card";
 import { useAuth } from "@/hooks/useAuth";
-import { OrderDetails, type OrderRecord } from "@/components/orders/OrderDetails";
 import { ORDER_STATUSES } from "@/lib/orders/status";
+import {
+  getCustomerStatusMeta,
+  normalizeOrderStatus,
+} from "@/lib/orders/statusDisplay";
+import type { OrderRecord } from "@/lib/orders/types";
 import { orderNumberFromId } from "@/utils/order";
 
 type Address = {
@@ -85,46 +92,6 @@ function summaryToOrder(summary: LocalSummary): OrderRecord {
   };
 }
 
-function normalizeStatus(status?: string) {
-  if (!status) return ORDER_STATUSES.PENDING_PAYMENT;
-  switch (status) {
-    case "payment_pending":
-      return ORDER_STATUSES.PENDING_PAYMENT;
-    case "paid":
-      return ORDER_STATUSES.NEW;
-    case "fulfilled":
-      return ORDER_STATUSES.COMPLETED;
-    case "cancelled":
-      return ORDER_STATUSES.CANCELLED;
-    case "failed":
-      return ORDER_STATUSES.FAILED;
-    default:
-      return status;
-  }
-}
-
-function statusCopy(status?: string) {
-  const normalized = normalizeStatus(status);
-  switch (normalized) {
-    case ORDER_STATUSES.PENDING_PAYMENT:
-      return "Payment processing";
-    case ORDER_STATUSES.NEW:
-      return "Order confirmed";
-    case ORDER_STATUSES.ACCEPTED:
-      return "Order accepted";
-    case ORDER_STATUSES.READY:
-      return "Order ready";
-    case ORDER_STATUSES.COMPLETED:
-      return "Order completed";
-    case ORDER_STATUSES.CANCELLED:
-      return "Order cancelled";
-    case ORDER_STATUSES.FAILED:
-      return "Payment failed";
-    default:
-      return "Order confirmed";
-  }
-}
-
 export default function OrderSuccessClient() {
   const searchParams = useSearchParams();
   const orderId = searchParams.get("orderId") ?? "";
@@ -201,7 +168,7 @@ export default function OrderSuccessClient() {
       }
     };
 
-    const status = normalizeStatus(order?.status);
+    const status = normalizeOrderStatus(order?.status);
     if (!order || status === ORDER_STATUSES.PENDING_PAYMENT) {
       timer = setInterval(poll, 2500);
       poll();
@@ -245,14 +212,24 @@ export default function OrderSuccessClient() {
 
     return (
       <div className="space-y-6">
-        <div>
+        <div className="space-y-3">
           <h1 className="text-2xl font-semibold text-zinc-900">
-            {statusCopy(order.status)}
+            {getCustomerStatusMeta(order).label}
           </h1>
           <p className="text-sm text-zinc-600">
             Order #{orderNumberFromId(orderId)}
           </p>
-          {normalizeStatus(order.status) === ORDER_STATUSES.PENDING_PAYMENT ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <OrderStatusBadge
+              status={order.status}
+              fulfillment={order.fulfillment}
+              fulfillmentStatus={order.fulfillmentStatus}
+            />
+            <p className="text-sm text-zinc-600">
+              {getCustomerStatusMeta(order).hint}
+            </p>
+          </div>
+          {normalizeOrderStatus(order.status) === ORDER_STATUSES.PENDING_PAYMENT ? (
             <p className="text-xs text-zinc-500">
               Payment confirmation can take a moment. We&apos;ll update this page
               automatically.
@@ -260,7 +237,17 @@ export default function OrderSuccessClient() {
           ) : null}
         </div>
 
-        <OrderDetails order={order} />
+        <Card className="space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-zinc-900">Order timeline</h2>
+            <p className="text-sm text-zinc-600">
+              Track each milestone as your order moves forward.
+            </p>
+          </div>
+          <OrderTimeline order={order} />
+        </Card>
+
+        <OrderSummaryCard order={order} />
 
         <Link
           href="/shop"
@@ -291,7 +278,7 @@ export default function OrderSuccessClient() {
           Order #{orderNumberFromId(orderId)}
         </p>
       </div>
-      <OrderDetails order={guestOrder} />
+      <OrderSummaryCard order={guestOrder} />
       <Link
         href="/shop"
         className="inline-flex h-11 items-center justify-center rounded-full bg-zinc-900 px-5 text-sm font-medium text-white hover:bg-zinc-800"
