@@ -31,6 +31,16 @@ export type Product = {
   groupKey?: string;
   isSellableOnline?: boolean;
   onlineBlockReason?: string;
+  primaryImageUrl?: string;
+  imageSource?: string;
+  imageMatchedBy?: string;
+  imageConfidence?: number;
+  imageOriginalFileName?: string;
+  nameNormalized?: string;
+  sizeNormalized?: string;
+  packNormalized?: string;
+  categoryNormalized?: string;
+  matchTokens?: string[];
 };
 
 export type ProductDetail = Product & {
