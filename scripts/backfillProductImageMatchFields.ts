@@ -1,7 +1,11 @@
 import { FieldPath, FieldValue } from "firebase-admin/firestore";
 import { loadEnvFromFile } from "./lib/env";
 import { getFirestoreDb } from "./lib/firebaseAdmin";
-import { parseCommonArgs, printSummary } from "./lib/imageImport";
+import {
+  parseCommonArgs,
+  printSummary,
+  writeArtifactFile,
+} from "./lib/imageImport";
 import { buildNormalizedProductImageFields } from "./lib/imageMatchingNormalize";
 
 type ProductDoc = {
@@ -104,13 +108,16 @@ async function main() {
     if (typeof limit === "number" && processed >= limit) break;
   }
 
-  printSummary("Image match field backfill summary", {
+  const summary = {
     processed,
     updated,
     skipped,
     errors,
     dryRun,
-  });
+  };
+
+  writeArtifactFile("backfillProductImageMatchFields-summary.json", summary);
+  printSummary("Image match field backfill summary", summary);
 }
 
 main().catch((error) => {

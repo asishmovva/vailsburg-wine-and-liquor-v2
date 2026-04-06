@@ -36,6 +36,8 @@ export type Product = {
   imageMatchedBy?: string;
   imageConfidence?: number;
   imageOriginalFileName?: string;
+  imageImportCategory?: string;
+  imageSourcePath?: string;
   nameNormalized?: string;
   sizeNormalized?: string;
   packNormalized?: string;
