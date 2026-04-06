@@ -10,7 +10,13 @@
     "seed:dry": "ts-node scripts/seedProductsFromCsv.ts --dry-run",
     "seed:products": "ts-node scripts/seedProductsFromCsv.ts",
     "backfill:name-lower:dry": "ts-node scripts/backfillNameLower.ts --dry-run",
-    "backfill:name-lower": "ts-node scripts/backfillNameLower.ts"
+    "backfill:name-lower": "ts-node scripts/backfillNameLower.ts",
+    "images:backfill:dry": "ts-node --project tsconfig.scripts.json scripts/backfillProductImageMatchFields.ts --dry-run",
+    "images:backfill": "ts-node --project tsconfig.scripts.json scripts/backfillProductImageMatchFields.ts",
+    "images:index": "ts-node --project tsconfig.scripts.json scripts/indexLocalProductImages.ts",
+    "images:match": "ts-node --project tsconfig.scripts.json scripts/matchIndexedImagesToProducts.ts",
+    "images:attach:dry": "ts-node --project tsconfig.scripts.json scripts/attachApprovedImages.ts --dry-run",
+    "images:attach": "ts-node --project tsconfig.scripts.json scripts/attachApprovedImages.ts"
   },
   "dependencies": {
     "@stripe/react-stripe-js": "^5.4.1",
@@ -21,6 +27,7 @@
     "nodemailer": "^8.0.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "sharp": "^0.34.5",
     "stripe": "^20.2.0"
   },
   "devDependencies": {

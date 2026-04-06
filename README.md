@@ -94,6 +94,64 @@ SMTP_PASS=GMAIL_APP_PASSWORD
 
 For Gmail/Workspace, create an App Password (Google Account > Security > App passwords) and use it as `SMTP_PASS`.
 
+## Product image matching foundation (Phase 16A)
+
+Local source images should live in a gitignored folder at the project root:
+
+```text
+images_import/
+```
+
+Artifacts are written to:
+
+```text
+artifacts/
+```
+
+Recommended execution order:
+
+1. Backfill normalized image-matching fields on products:
+
+```bash
+pnpm images:backfill:dry --limit=50
+pnpm images:backfill
+```
+
+2. Index local images:
+
+```bash
+pnpm images:index -- --folder=images_import/beers --limit=50
+pnpm images:index
+```
+
+3. Run scoring-based matching:
+
+```bash
+pnpm images:match -- --input=artifacts/image-candidates.json --limit=50
+```
+
+4. Attach only approved matches:
+
+```bash
+pnpm images:attach:dry -- --input=artifacts/matched_auto.json --limit=20
+pnpm images:attach -- --input=artifacts/matched_auto.json
+pnpm images:attach -- --input=artifacts/approved_reviewed.json --overwrite
+```
+
+Attach script requirements:
+
+- `FIREBASE_STORAGE_BUCKET` must be set
+- uploads go to `products/{productId}/primary.webp`
+- Firestore writes `primaryImageUrl` plus import metadata
+- existing images are preserved unless `--overwrite` is passed
+
+Matching outputs:
+
+- `artifacts/image-candidates.json`
+- `artifacts/matched_auto.json`
+- `artifacts/needs_review.json`
+- `artifacts/unmatched.json`
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
