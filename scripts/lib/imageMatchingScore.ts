@@ -16,6 +16,22 @@ const DEFAULT_THRESHOLDS: MatchThresholds = {
   reviewMin: 55,
 };
 
+type ContainerType = "CAN" | "BTL" | null;
+
+function detectContainerType(value: string) {
+  const normalized = value
+    .toLowerCase()
+    .replace(/[_./-]+/g, " ")
+    .replace(/\s+/g, " ");
+  if (/\b(can|cans)\b/.test(normalized)) {
+    return "CAN" as ContainerType;
+  }
+  if (/\b(btl|bottle|bottles)\b/.test(normalized)) {
+    return "BTL" as ContainerType;
+  }
+  return null;
+}
+
 function intersection<T>(left: T[], right: T[]) {
   const rightSet = new Set(right);
   return left.filter((item) => rightSet.has(item));
@@ -42,6 +58,21 @@ export function scoreImageCandidate(
       reasons: ["rejected: category mismatch"],
       hasConflict: true,
     };
+  }
+
+  const imageContainer = detectContainerType(image.sourceFileName);
+  const productContainer = detectContainerType(product.name);
+  if (imageContainer && productContainer) {
+    if (imageContainer === productContainer) {
+      score += 20;
+      reasons.push(`+20 exact container match (${imageContainer})`);
+    } else {
+      score -= 45;
+      hasConflict = true;
+      reasons.push(
+        `-45 conflicting container (${imageContainer} vs ${productContainer})`
+      );
+    }
   }
 
   if (image.nameNormalized && image.nameNormalized === product.nameNormalized) {
