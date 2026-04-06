@@ -3,6 +3,7 @@ import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { getStripe } from "@/lib/stripe";
 import { ORDER_STATUSES } from "@/lib/orders/status";
+import { resolveProductImage } from "@/services/productImage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -227,6 +228,7 @@ export async function POST(request: Request) {
         price?: number;
         stock?: number;
         image?: string;
+        primaryImageUrl?: string;
         category?: string;
         taxable?: boolean;
         isSellableOnline?: boolean;
@@ -253,7 +255,7 @@ export async function POST(request: Request) {
         name: data.name ?? "Item",
         price,
         qty,
-        image: data.image ?? null,
+        image: resolveProductImage(data) || null,
         category: data.category ?? "Other",
       });
     }

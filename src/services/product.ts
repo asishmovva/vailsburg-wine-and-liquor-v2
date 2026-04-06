@@ -2,6 +2,7 @@
 
 import { adminDb } from "@/lib/firebaseAdmin";
 import { TTLCache } from "@/lib/cache/ttlCache";
+import { resolveProductImage } from "@/services/productImage";
 import type { ProductDetail } from "@/services/productTypes";
 
 type CachedProduct = { found: true; data: ProductDetail } | { found: false };
@@ -49,6 +50,7 @@ export async function loadProductById(
     subcategory?: string;
     price?: number;
     image?: string;
+    primaryImageUrl?: string;
     stock?: number;
     inStock?: boolean;
     size?: string;
@@ -72,7 +74,8 @@ export async function loadProductById(
     category: data.category ?? "Other",
     subcategory: data.subcategory ?? "",
     price: typeof data.price === "number" ? data.price : 0,
-    image: data.image ?? "",
+    image: resolveProductImage(data),
+    primaryImageUrl: data.primaryImageUrl ?? "",
     stock: typeof data.stock === "number" ? data.stock : 0,
     inStock:
       typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,

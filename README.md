@@ -94,7 +94,7 @@ SMTP_PASS=GMAIL_APP_PASSWORD
 
 For Gmail/Workspace, create an App Password (Google Account > Security > App passwords) and use it as `SMTP_PASS`.
 
-## Product image matching foundation (Phase 16A)
+## Product image matching + rollout (Phase 16A / 16B)
 
 Local source images should live in a gitignored folder at the project root:
 
@@ -117,6 +117,12 @@ pnpm images:backfill:dry --limit=50
 pnpm images:backfill
 ```
 
+Backfill writes a summary artifact to:
+
+```text
+artifacts/backfillProductImageMatchFields-summary.json
+```
+
 2. Index local images:
 
 ```bash
@@ -130,12 +136,25 @@ pnpm images:index
 pnpm images:match -- --input=artifacts/image-candidates.json --limit=50
 ```
 
-4. Attach only approved matches:
+4. Review the outputs and create an explicit approved file:
+
+```text
+artifacts/approved_matches.json
+```
+
+Recommended rollout:
+
+- start with `images_import/beers`
+- manually sample at least 20 auto-matches
+- manually sample at least 10 review cases
+- tighten thresholds if anything looks wrong
+
+5. Attach only approved matches:
 
 ```bash
-pnpm images:attach:dry -- --input=artifacts/matched_auto.json --limit=20
-pnpm images:attach -- --input=artifacts/matched_auto.json
-pnpm images:attach -- --input=artifacts/approved_reviewed.json --overwrite
+pnpm images:attach:dry -- --input=artifacts/approved_matches.json --limit=20
+pnpm images:attach -- --input=artifacts/approved_matches.json
+pnpm images:attach -- --input=artifacts/approved_matches.json --overwrite
 ```
 
 Attach script requirements:
@@ -144,6 +163,9 @@ Attach script requirements:
 - uploads go to `products/{productId}/primary.webp`
 - Firestore writes `primaryImageUrl` plus import metadata
 - existing images are preserved unless `--overwrite` is passed
+- attach runs write:
+  - `artifacts/attach-summary.json`
+  - `artifacts/attach-results.json`
 
 Matching outputs:
 
@@ -151,6 +173,11 @@ Matching outputs:
 - `artifacts/matched_auto.json`
 - `artifacts/needs_review.json`
 - `artifacts/unmatched.json`
+
+Storefront rollout behavior:
+
+- if `primaryImageUrl` exists, product reads prefer it
+- if not, the existing `image` field and current placeholder fallback remain unchanged
 
 ## Learn More
 

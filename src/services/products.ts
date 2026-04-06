@@ -2,6 +2,7 @@ import "server-only";
 
 import { adminDb } from "@/lib/firebaseAdmin";
 import { normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
+import { resolveProductImage } from "@/services/productImage";
 import type { Product, ProductFilters, ProductSort } from "@/services/productTypes";
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
@@ -179,6 +180,7 @@ export async function queryProducts(filters: ProductFilters) {
       subcategory?: string;
       price?: number;
       image?: string;
+      primaryImageUrl?: string;
       stock?: number;
       inStock?: boolean;
       size?: string;
@@ -197,7 +199,8 @@ export async function queryProducts(filters: ProductFilters) {
       category: data.category ?? "Other",
       subcategory: data.subcategory ?? "",
       price: typeof data.price === "number" ? data.price : 0,
-      image: data.image ?? "",
+      image: resolveProductImage(data),
+      primaryImageUrl: data.primaryImageUrl ?? "",
       stock: typeof data.stock === "number" ? data.stock : 0,
       inStock:
         typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,
