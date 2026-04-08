@@ -55,7 +55,7 @@ function formatMoney(value: number) {
 
 export function OrderSummaryCard({ order }: { order: OrderRecord }) {
   const fulfillment = order.fulfillment ?? "pickup";
-  const customerStatus = getCustomerStatusMeta(order);
+  const customerStatus = order.customerStatus ?? getCustomerStatusMeta(order);
 
   return (
     <div className="space-y-6">
@@ -81,6 +81,7 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
           <div className="space-y-1 text-sm text-zinc-600">
             <p className="font-medium text-zinc-800">Pickup details</p>
             <p>We&apos;ll notify you when your order is ready for pickup.</p>
+            <p>Show this order at the counter when you arrive.</p>
           </div>
         )}
       </Card>
@@ -149,6 +150,12 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
           <div className="flex items-center justify-between">
             <span>Tip</span>
             <span>{formatMoney(order.tip)}</span>
+          </div>
+        ) : null}
+        {order.paymentMethodLabel ? (
+          <div className="flex items-center justify-between">
+            <span>Payment method</span>
+            <span>{order.paymentMethodLabel}</span>
           </div>
         ) : null}
         <div className="flex items-center justify-between">

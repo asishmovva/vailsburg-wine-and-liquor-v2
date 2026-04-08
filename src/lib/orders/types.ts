@@ -1,5 +1,19 @@
 export type OrderFulfillment = "delivery" | "pickup";
 
+export type OrderStatusTone =
+  | "success"
+  | "warning"
+  | "neutral"
+  | "destructive"
+  | "info";
+
+export type CustomerStatusView = {
+  key: string;
+  label: string;
+  tone: OrderStatusTone;
+  hint: string;
+};
+
 export type OrderItem = {
   productId: string;
   name: string;
@@ -33,6 +47,9 @@ export type OrderRecord = {
   id: string;
   orderId?: string;
   status?: string;
+  normalizedStatus?: string;
+  customerStatus?: CustomerStatusView | null;
+  paymentMethodLabel?: string | null;
   fulfillment: OrderFulfillment;
   delivery?: DeliveryInfo | null;
   items: OrderItem[];
@@ -51,14 +68,22 @@ export type OrderRecord = {
   statusNote?: string | null;
   notifications?: OrderNotifications | null;
   fulfillmentStatus?: string | null;
+  stripe?: {
+    paymentIntentId?: string | null;
+    checkoutSessionId?: string | null;
+  } | null;
   pos?: {
     pushStatus?: string | null;
   } | null;
 };
 
 export type OrderListRecord = {
+  id?: string;
   orderId: string;
   status?: string;
+  normalizedStatus?: string;
+  customerStatus?: CustomerStatusView | null;
+  paymentMethodLabel?: string | null;
   total?: number;
   fulfillment?: OrderFulfillment;
   createdAt?: unknown;

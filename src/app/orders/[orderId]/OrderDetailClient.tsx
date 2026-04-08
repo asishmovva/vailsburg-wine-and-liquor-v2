@@ -1,39 +1,42 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { OrderStatusBadge } from "@/components/orders/OrderStatusBadge";
 import { OrderSummaryCard } from "@/components/orders/OrderSummaryCard";
 import { OrderTimeline } from "@/components/orders/OrderTimeline";
 import { Card } from "@/components/ui/Card";
+import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
+import { authedFetch } from "@/lib/client/authedFetch";
 import { ORDER_STATUSES } from "@/lib/orders/status";
 import {
   getCustomerStatusMeta,
   normalizeOrderStatus,
-} from "@/lib/orders/statusDisplay";
+} from "@/lib/orders/statusMapping";
 import type { OrderRecord } from "@/lib/orders/types";
 import { orderNumberFromId } from "@/utils/order";
 
 function getFulfillmentMessage(order: OrderRecord) {
   if (order.fulfillment === "delivery") {
-        return {
-          title: "Delivery details",
-          lines: [
-            order.delivery?.address ?? "Delivery address unavailable.",
-            order.delivery?.miles
-              ? `${order.delivery.miles.toFixed(1)} miles from store`
-              : "Same-day delivery requested.",
-            "We'll notify you when your order is on the way.",
-          ],
-        };
+    return {
+      title: "Delivery details",
+      lines: [
+        order.delivery?.address ?? "Delivery address unavailable.",
+        order.delivery?.miles
+          ? `${order.delivery.miles.toFixed(1)} miles from store`
+          : "Same-day delivery requested.",
+        "We'll notify you when your order is on the way.",
+      ],
+    };
   }
 
   return {
     title: "Pickup details",
     lines: [
       "We'll notify you when your order is ready for pickup.",
-      "Bring your order confirmation and a valid ID at pickup.",
+      "Show this order at the counter when you arrive.",
+      "Pickup at: Vailsburg Wine & Liquor",
     ],
   };
 }
@@ -43,25 +46,25 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
   const [order, setOrder] = useState<OrderRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const lastStatusRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    const loadOrder = async () => {
+  const loadOrder = useCallback(
+    async ({
+      showLoader = false,
+      verify = false,
+    }: {
+      showLoader?: boolean;
+      verify?: boolean;
+    } = {}) => {
       if (!user || !orderId) return;
-      setLoading(true);
+      if (showLoader) setLoading(true);
       setError(null);
       try {
-        const token = await user.getIdToken();
-        const response = await fetch(`/api/orders/${orderId}`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        console.log("Order detail fetch", {
-          orderId,
-          status: response.status,
-        });
-        if (!active) return;
+        if (verify) {
+          await authedFetch(`/api/orders/verify?orderId=${encodeURIComponent(orderId)}`);
+        }
+
+        const response = await authedFetch(`/api/orders/${orderId}`);
         if (!response.ok) {
           setOrder(null);
           if (response.status !== 404) {
@@ -70,9 +73,10 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
           }
           return;
         }
+
         const payload = (await response.json()) as { order: OrderRecord };
         const data = payload.order;
-        setOrder({
+        const nextOrder: OrderRecord = {
           ...data,
           id: data.id ?? orderId,
           items: data.items ?? [],
@@ -81,26 +85,60 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
           tax: data.tax ?? 0,
           subtotal: data.subtotal ?? 0,
           total: data.total ?? 0,
-        });
-      } catch (err) {
-        if (active) {
-          setError((err as Error).message ?? "Unable to load order.");
-        }
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
+        };
 
-    void loadOrder();
-    return () => {
-      active = false;
-    };
-  }, [orderId, user]);
+        const nextStatusKey = nextOrder.customerStatus?.key ?? normalizeOrderStatus(nextOrder.status);
+        if (lastStatusRef.current && lastStatusRef.current !== nextStatusKey) {
+          const label = nextOrder.customerStatus?.label ?? getCustomerStatusMeta(nextOrder).label;
+          if (
+            nextStatusKey === ORDER_STATUSES.CANCELLED ||
+            nextStatusKey === ORDER_STATUSES.FAILED
+          ) {
+            toast.error(`Order update: ${label}`);
+          } else {
+            toast.success(`Order update: ${label}`);
+          }
+        }
+        lastStatusRef.current = nextStatusKey;
+        setOrder(nextOrder);
+      } catch (err) {
+        setError((err as Error).message ?? "Unable to load order.");
+      } finally {
+        if (showLoader) setLoading(false);
+      }
+    },
+    [orderId, user]
+  );
+
+  useEffect(() => {
+    if (!user || !orderId) return;
+    void loadOrder({ showLoader: true, verify: true });
+  }, [loadOrder, orderId, user]);
+
+  useEffect(() => {
+    if (!user || !orderId) return;
+    const interval = setInterval(() => {
+      const normalizedStatus = normalizeOrderStatus(order?.status);
+      void loadOrder({
+        showLoader: false,
+        verify: normalizedStatus === ORDER_STATUSES.PENDING_PAYMENT,
+      });
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, [loadOrder, order?.status, orderId, user]);
+
+  const handleCopyOrderId = async () => {
+    try {
+      await navigator.clipboard.writeText(orderId);
+      toast.success("Order ID copied");
+    } catch {
+      toast.error("Unable to copy order ID");
+    }
+  };
 
   if (loading) {
-    return (
-      <Card className="p-6 text-sm text-zinc-600">Loading order...</Card>
-    );
+    return <Card className="p-6 text-sm text-zinc-600">Loading order...</Card>;
   }
 
   if (error) {
@@ -125,30 +163,44 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
     );
   }
 
-  const statusMeta = getCustomerStatusMeta(order);
-  const normalizedStatus = normalizeOrderStatus(order.status);
+  const statusMeta = order.customerStatus ?? getCustomerStatusMeta(order);
+  const normalizedStatus = order.normalizedStatus ?? normalizeOrderStatus(order.status);
   const fulfillmentMessage = getFulfillmentMessage(order);
 
   return (
     <div className="space-y-6">
       <div className="space-y-3">
-        <h1 className="text-2xl font-semibold text-zinc-900">
-          Order #{orderNumberFromId(orderId)}
-        </h1>
-        <div className="flex flex-wrap items-center gap-3">
-          <OrderStatusBadge
-            status={order.status}
-            fulfillment={order.fulfillment}
-            fulfillmentStatus={order.fulfillmentStatus}
-          />
-          <p className="text-sm text-zinc-600">{statusMeta.hint}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-2">
+            <h1 className="text-2xl font-semibold text-zinc-900">
+              {statusMeta.label}
+            </h1>
+            <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-600">
+              <span>Order #{orderNumberFromId(orderId)}</span>
+              <button
+                type="button"
+                onClick={handleCopyOrderId}
+                className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:border-zinc-400"
+              >
+                Copy order ID
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <OrderStatusBadge
+                status={order.status}
+                fulfillment={order.fulfillment}
+                fulfillmentStatus={order.fulfillmentStatus}
+              />
+              <p className="text-sm text-zinc-600">{statusMeta.hint}</p>
+            </div>
+          </div>
+          <Link
+            href="/orders"
+            className="text-sm text-zinc-600 underline-offset-4 hover:underline"
+          >
+            Back to orders
+          </Link>
         </div>
-        <Link
-          href="/orders"
-          className="text-sm text-zinc-600 underline-offset-4 hover:underline"
-        >
-          Back to orders
-        </Link>
       </div>
 
       {normalizedStatus === ORDER_STATUSES.CANCELLED ? (

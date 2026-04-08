@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { EmailPayload } from "@/lib/email/types";
-import { getCustomerStatusDisplay } from "@/lib/orders/statusDisplay";
+import { getCustomerStatusDisplay } from "@/lib/orders/statusMapping";
 
 type OrderEmailItem = {
   name: string;
@@ -172,7 +172,10 @@ export function buildCustomerOrderEmail(
         return {
           subject: `Order received - #${shortId}`,
           heading: `Order received #${shortId}`,
-          message: "We have your order and will keep you posted as it moves forward.",
+          message:
+            order.fulfillment === "delivery"
+              ? "We have your delivery order and will keep you posted as it moves forward."
+              : "We have your pickup order and will let you know when it is ready.",
         };
       case "ready":
         return {
@@ -201,6 +204,16 @@ export function buildCustomerOrderEmail(
     order.fulfillment === "delivery"
       ? order.delivery?.address ?? "-"
       : "Pickup";
+  const instructionLines =
+    order.fulfillment === "delivery"
+      ? [
+          "Same-day delivery requested.",
+          "We will notify you again if your order goes out for delivery.",
+        ]
+      : [
+          "Pickup at: Vailsburg Wine & Liquor",
+          "Show this order at the counter when you arrive.",
+        ];
 
   const text = [
     `Hi ${customerName},`,
@@ -213,6 +226,8 @@ export function buildCustomerOrderEmail(
     `Items:`,
     ...itemsLines,
     order.fulfillment === "delivery" ? `Address: ${address}` : undefined,
+    "",
+    ...instructionLines,
     orderLink ? "" : undefined,
     orderLink ? `View your order: ${orderLink}` : undefined,
   ]
@@ -231,6 +246,7 @@ export function buildCustomerOrderEmail(
     <h3>Items</h3>
     <ul>${htmlItems}</ul>
     ${order.fulfillment === "delivery" ? `<p><strong>Address:</strong> ${address}</p>` : ""}
+    <p>${instructionLines.join("<br />")}</p>
     ${orderLink ? `<p><a href="${orderLink}">View your order</a></p>` : ""}
   `.trim();
 

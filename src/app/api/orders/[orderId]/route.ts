@@ -1,11 +1,13 @@
-import { NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
+import { NextResponse, type NextRequest } from "next/server";
+import { adminDb } from "@/lib/firebaseAdmin";
+import { formatOrderRecordForClient } from "@/lib/orders/formatOrderForClient";
+import { requireAuth } from "@/lib/server/requireAuth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  request: Request,
+  request: NextRequest,
   context: { params: Promise<{ orderId: string }> }
 ) {
   const params = await context.params;
@@ -14,21 +16,9 @@ export async function GET(
     return NextResponse.json({ error: "Missing orderId." }, { status: 400 });
   }
 
-  const authHeader = request.headers.get("authorization") ?? "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.replace("Bearer ", "")
-    : "";
-
-  if (!token) {
-    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-  }
-
-  let userId: string;
-  try {
-    const decoded = await adminAuth().verifyIdToken(token);
-    userId = decoded.uid;
-  } catch {
-    return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  const { auth, error } = await requireAuth(request);
+  if (error || !auth) {
+    return error ?? NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
   const db = adminDb();
@@ -39,11 +29,15 @@ export async function GET(
   }
 
   const data = snap.data() as { userId?: string | null; id?: string };
-  if (data.userId && data.userId !== userId) {
+  if (data.userId && data.userId !== auth.uid) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
 
   return NextResponse.json({
-    order: { ...data, id: data.id ?? orderId, orderId },
+    order: formatOrderRecordForClient({
+      ...data,
+      id: data.id ?? orderId,
+      orderId,
+    }),
   });
 }

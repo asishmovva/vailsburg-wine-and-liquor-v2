@@ -9,7 +9,7 @@ export function orderNumberFromId(id: string, digits = 5) {
   return value.toString().padStart(digits, "0");
 }
 
-export function formatOrderDate(value?: Timestamp | Date | null) {
+export function formatOrderDate(value?: Timestamp | Date | string | null | unknown) {
   if (!value) return "";
   const date =
     value instanceof Date
