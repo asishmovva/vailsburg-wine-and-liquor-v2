@@ -19,6 +19,15 @@ type ProductImageDoc = {
   image?: string;
 };
 
+type ManualReviewRecord = {
+  productId: string;
+  imagePath: string;
+  confidence?: number;
+  source?: string;
+};
+
+type ApprovedAttachRecord = MatchOutputRecord | ManualReviewRecord;
+
 type AttachResult = {
   productId: string | null;
   productName: string | null;
@@ -41,17 +50,53 @@ function buildDownloadUrl(bucketName: string, filePath: string, token: string) {
   )}?alt=media&token=${token}`;
 }
 
+function isManualReviewRecord(record: ApprovedAttachRecord): record is ManualReviewRecord {
+  return "imagePath" in record;
+}
+
+function getProductId(record: ApprovedAttachRecord) {
+  return isManualReviewRecord(record) ? record.productId : record.chosenProductId;
+}
+
+function getImageFilePath(record: ApprovedAttachRecord) {
+  return isManualReviewRecord(record) ? record.imagePath : record.sourceFilePath;
+}
+
+function getImageFileName(record: ApprovedAttachRecord) {
+  return isManualReviewRecord(record)
+    ? path.basename(record.imagePath)
+    : record.sourceFileName;
+}
+
+function getMatchMethod(record: ApprovedAttachRecord): AttachResult["matchMethod"] {
+  if (isManualReviewRecord(record)) return "manual_review";
+  return record.decision === "needs-review" ? "manual_review" : "scored_match";
+}
+
+function getConfidence(record: ApprovedAttachRecord) {
+  return isManualReviewRecord(record) ? record.confidence ?? 0 : record.score;
+}
+
+function getProductName(record: ApprovedAttachRecord) {
+  return isManualReviewRecord(record) ? null : record.chosenProductName;
+}
+
+function getImportCategory(record: ApprovedAttachRecord) {
+  return isManualReviewRecord(record) ? undefined : record.categoryNormalized;
+}
+
 async function main() {
   loadEnvFromFile(".env.local");
   const { dryRun, limit, input, overwrite } = parseCommonArgs();
   const db = getFirestoreDb();
   const bucket = getStorageBucket();
 
-  const approved = readJsonFile<MatchOutputRecord[]>(
+  const approved = readJsonFile<ApprovedAttachRecord[]>(
     input ?? "artifacts/approved_matches.json"
   );
 
   const targetRecords = approved
+    .filter((record) => Boolean(getProductId(record)))
     .slice(0, limit);
 
   let processed = 0;
@@ -64,21 +109,23 @@ async function main() {
 
   for (const record of targetRecords) {
     processed += 1;
-    const productId = record.chosenProductId;
-    const matchMethod =
-      record.decision === "needs-review" ? "manual_review" : "scored_match";
+    const productId = getProductId(record);
+    const matchMethod = getMatchMethod(record);
+    const confidence = getConfidence(record);
+    const imageFilePath = getImageFilePath(record);
+    const imageFileName = getImageFileName(record);
 
     if (!productId) {
       skippedUnapproved += 1;
       results.push({
         productId: null,
-        productName: record.chosenProductName,
-        imageFilePath: record.sourceFilePath,
+        productName: getProductName(record),
+        imageFilePath,
         storagePath: null,
         matchMethod,
-        confidence: record.score,
+        confidence,
         result: "skipped_unapproved",
-        reason: "Missing chosenProductId in approved input.",
+        reason: "Missing productId in approved input.",
       });
       continue;
     }
@@ -92,17 +139,17 @@ async function main() {
         errors += 1;
         results.push({
           productId,
-          productName: record.chosenProductName,
-          imageFilePath: record.sourceFilePath,
+          productName: getProductName(record),
+          imageFilePath,
           storagePath,
           matchMethod,
-          confidence: record.score,
+          confidence,
           result: "error",
           reason: "Product doc missing.",
         });
         console.error("Missing product for approved image:", {
           productId,
-          sourceFilePath: record.sourceFilePath,
+          sourceFilePath: imageFilePath,
         });
         continue;
       }
@@ -117,27 +164,27 @@ async function main() {
         skippedExisting += 1;
         results.push({
           productId,
-          productName: productData.name ?? record.chosenProductName,
-          imageFilePath: record.sourceFilePath,
+          productName: productData.name ?? getProductName(record),
+          imageFilePath,
           storagePath,
           matchMethod,
-          confidence: record.score,
+          confidence,
           result: "skipped_existing",
           reason: "Existing image present and overwrite not enabled.",
         });
         continue;
       }
 
-      const absoluteSourcePath = path.resolve(process.cwd(), record.sourceFilePath);
+      const absoluteSourcePath = path.resolve(process.cwd(), imageFilePath);
       if (!fs.existsSync(absoluteSourcePath)) {
         skippedMissingFile += 1;
         results.push({
           productId,
-          productName: productData.name ?? record.chosenProductName,
-          imageFilePath: record.sourceFilePath,
+          productName: productData.name ?? getProductName(record),
+          imageFilePath,
           storagePath,
           matchMethod,
-          confidence: record.score,
+          confidence,
           result: "skipped_missing_file",
           reason: "Source file missing on disk.",
         });
@@ -163,7 +210,7 @@ async function main() {
             cacheControl: "public,max-age=31536000,immutable",
             metadata: {
               firebaseStorageDownloadTokens: downloadToken,
-              sourceFileName: record.sourceFileName,
+              sourceFileName: imageFileName,
             },
           },
         });
@@ -173,10 +220,10 @@ async function main() {
             primaryImageUrl: publicUrl,
             imageSource: "folder_import_v1",
             imageMatchedBy: matchMethod,
-            imageConfidence: record.score,
-            imageOriginalFileName: record.sourceFileName,
-            imageImportCategory: record.categoryNormalized,
-            imageSourcePath: record.sourceFilePath,
+            imageConfidence: confidence,
+            imageOriginalFileName: imageFileName,
+            imageImportCategory: getImportCategory(record),
+            imageSourcePath: imageFilePath,
             imageImportedAt: FieldValue.serverTimestamp(),
             updatedAt: FieldValue.serverTimestamp(),
           },
@@ -187,28 +234,28 @@ async function main() {
       uploaded += 1;
       results.push({
         productId,
-        productName: productData.name ?? record.chosenProductName,
-        imageFilePath: record.sourceFilePath,
+        productName: productData.name ?? getProductName(record),
+        imageFilePath,
         storagePath,
         matchMethod,
-        confidence: record.score,
+        confidence,
         result: "uploaded",
       });
     } catch (error) {
       errors += 1;
       results.push({
         productId,
-        productName: record.chosenProductName,
-        imageFilePath: record.sourceFilePath,
+        productName: getProductName(record),
+        imageFilePath,
         storagePath,
         matchMethod,
-        confidence: record.score,
+        confidence,
         result: "error",
         reason: (error as Error).message,
       });
       console.error("Failed to attach image:", {
         productId,
-        sourceFilePath: record.sourceFilePath,
+        sourceFilePath: imageFilePath,
         error: (error as Error).message,
       });
     }
