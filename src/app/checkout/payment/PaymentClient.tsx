@@ -116,7 +116,7 @@ function PaymentForm({
         recordGuestOrder(orderId);
       }
       clear();
-      router.replace(`/order/success?orderId=${encodeURIComponent(orderId)}`);
+      router.replace(`/orders/${encodeURIComponent(orderId)}`);
       return;
     }
 

@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { collection, onSnapshot, orderBy, query, type Timestamp } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { OrderStatusBadge } from "@/components/orders/OrderStatusBadge";
@@ -10,14 +9,13 @@ import { Card } from "@/components/ui/Card";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
-import { db } from "@/lib/firebase";
-import { getCustomerStatusMeta } from "@/lib/orders/statusDisplay";
+import { authedFetch } from "@/lib/client/authedFetch";
+import {
+  getCustomerStatusMeta,
+  normalizeOrderStatus,
+} from "@/lib/orders/statusMapping";
 import type { OrderItem, OrderListRecord } from "@/lib/orders/types";
 import { formatOrderDate, orderNumberFromId } from "@/utils/order";
-
-type OrderPointer = OrderListRecord & {
-  createdAt?: Timestamp;
-};
 
 function buildItemPreview(items?: OrderItem[]) {
   if (!items || items.length === 0) {
@@ -32,7 +30,9 @@ function buildItemPreview(items?: OrderItem[]) {
   return {
     count: itemCount,
     summary:
-      remainder > 0 ? `${itemCount} items • ${preview}, +${remainder} more` : `${itemCount} items • ${preview}`,
+      remainder > 0
+        ? `${itemCount} items • ${preview}, +${remainder} more`
+        : `${itemCount} items • ${preview}`,
   };
 }
 
@@ -40,53 +40,50 @@ function OrdersContent() {
   const { user } = useAuth();
   const router = useRouter();
   const { addItem } = useCart();
-  const [orders, setOrders] = useState<OrderPointer[]>([]);
+  const [orders, setOrders] = useState<OrderListRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reorderingId, setReorderingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!db || !user) return;
-    setLoading(true);
-    setError(null);
-    const q = query(
-      collection(db, "users", user.uid, "orders"),
-      orderBy("createdAt", "desc")
-    );
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        const data = snapshot.docs.map((docSnap) => {
-          const value = docSnap.data() as OrderPointer;
-          return {
-            ...value,
-            orderId: value.orderId ?? docSnap.id,
-          };
-        });
-        setOrders(data);
-        setLoading(false);
-      },
-      (err) => {
-        setError(err.message ?? "Unable to load orders.");
-        setLoading(false);
+  const loadOrders = useCallback(
+    async (showLoader = false) => {
+      if (!user) return;
+      if (showLoader) setLoading(true);
+      try {
+        const response = await authedFetch("/api/orders");
+        if (!response.ok) {
+          throw new Error("Unable to load orders.");
+        }
+        const payload = (await response.json()) as { orders?: OrderListRecord[] };
+        setOrders(payload.orders ?? []);
+        setError(null);
+      } catch (err) {
+        setError((err as Error).message ?? "Unable to load orders.");
+      } finally {
+        if (showLoader) setLoading(false);
       }
-    );
+    },
+    [user]
+  );
 
-    return () => unsubscribe();
-  }, [user]);
+  useEffect(() => {
+    if (!user) return;
+    void loadOrders(true);
+  }, [loadOrders, user]);
 
-  const hasOrders = orders.length > 0;
-
-  const filteredOrders = useMemo(() => orders, [orders]);
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(() => {
+      void loadOrders(false);
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [loadOrders, user]);
 
   const handleReorder = async (orderId: string) => {
-    if (!user || !db || !orderId) return;
+    if (!user || !orderId) return;
     setReorderingId(orderId);
     try {
-      const token = await user.getIdToken();
-      const response = await fetch(`/api/orders/${orderId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await authedFetch(`/api/orders/${orderId}`);
 
       if (!response.ok) {
         throw new Error("Unable to load order.");
@@ -179,6 +176,9 @@ function OrdersContent() {
     }
   };
 
+  const hasOrders = orders.length > 0;
+  const filteredOrders = useMemo(() => orders, [orders]);
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -229,61 +229,70 @@ function OrdersContent() {
   return (
     <div className="space-y-4">
       {filteredOrders.map((order) => {
-        const statusMeta = getCustomerStatusMeta({
+        const statusMeta = order.customerStatus ?? getCustomerStatusMeta({
           status: order.status,
           fulfillment: order.fulfillment ?? "pickup",
         });
         const preview = buildItemPreview(order.items);
+        const normalizedStatus = order.normalizedStatus ?? normalizeOrderStatus(order.status);
 
         return (
-        <Card key={order.orderId} className="space-y-4 p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <p className="text-sm text-zinc-500">Order</p>
-              <p className="text-lg font-semibold text-zinc-900">
-                #{orderNumberFromId(order.orderId)}
-              </p>
-              <p className="text-xs text-zinc-500">
-                {formatOrderDate(order.createdAt)}
-              </p>
-              <p className="text-xs text-zinc-500">{statusMeta.hint}</p>
+          <Card key={order.orderId} className="space-y-4 p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1">
+                <p className="text-sm text-zinc-500">Order</p>
+                <p className="text-lg font-semibold text-zinc-900">
+                  #{orderNumberFromId(order.orderId)}
+                </p>
+                <p className="text-xs text-zinc-500">
+                  {formatOrderDate(order.createdAt)}
+                </p>
+                <p className="text-xs text-zinc-500">{statusMeta.hint}</p>
+              </div>
+              <div className="flex flex-col items-end gap-2">
+                <OrderStatusBadge
+                  status={order.status}
+                  fulfillment={order.fulfillment ?? "pickup"}
+                />
+                <span className="text-xs text-zinc-500 capitalize">
+                  {normalizedStatus === "out_for_delivery"
+                    ? "Delivery update"
+                    : order.fulfillment ?? "pickup"}
+                </span>
+              </div>
             </div>
-            <OrderStatusBadge
-              status={order.status}
-              fulfillment={order.fulfillment ?? "pickup"}
-            />
-          </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-4 text-sm text-zinc-600">
-            <span className="capitalize">
-              {order.fulfillment ?? "pickup"}
-            </span>
-            <span>{preview.count > 0 ? `${preview.count} items` : "Order details available"}</span>
-            <span className="font-semibold text-zinc-900">
-              ${Number(order.total ?? 0).toFixed(2)}
-            </span>
-          </div>
+            <div className="flex flex-wrap items-center justify-between gap-4 text-sm text-zinc-600">
+              <span className="capitalize">{order.fulfillment ?? "pickup"}</span>
+              <span>
+                {preview.count > 0 ? `${preview.count} items` : "Order details available"}
+              </span>
+              <span className="font-semibold text-zinc-900">
+                ${Number(order.total ?? 0).toFixed(2)}
+              </span>
+            </div>
 
-          <p className="text-sm text-zinc-600">{preview.summary}</p>
+            <p className="text-sm text-zinc-600">{preview.summary}</p>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Link
-              href={`/orders/${order.orderId}`}
-              className="text-sm font-medium text-zinc-900 underline-offset-4 hover:underline"
-            >
-              View details
-            </Link>
-            <button
-              type="button"
-              onClick={() => handleReorder(order.orderId)}
-              disabled={reorderingId === order.orderId}
-              className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-medium text-zinc-900 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {reorderingId === order.orderId ? "Reordering..." : "Reorder"}
-            </button>
-          </div>
-        </Card>
-      )})}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Link
+                href={`/orders/${order.orderId}`}
+                className="text-sm font-medium text-zinc-900 underline-offset-4 hover:underline"
+              >
+                View details
+              </Link>
+              <button
+                type="button"
+                onClick={() => handleReorder(order.orderId)}
+                disabled={reorderingId === order.orderId}
+                className="inline-flex h-11 items-center justify-center rounded-full border border-zinc-300 px-5 text-sm font-medium text-zinc-900 hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {reorderingId === order.orderId ? "Reordering..." : "Reorder"}
+              </button>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }
