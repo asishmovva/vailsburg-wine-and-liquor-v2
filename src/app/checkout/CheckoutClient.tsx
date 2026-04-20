@@ -508,6 +508,10 @@ export default function CheckoutClient() {
 
   useEffect(() => {
     if (fulfillment !== "delivery") return;
+    if (manualSearch) {
+      setValidation({ status: "idle" });
+      return;
+    }
     if (!addressQuery && !coords) {
       setValidation({ status: "idle" });
       return;
@@ -522,7 +526,7 @@ export default function CheckoutClient() {
     }, ADDRESS_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [addressSearch, addressQuery, coords, fulfillment, validateAddress]);
+  }, [addressQuery, coords, fulfillment, manualSearch, validateAddress]);
 
   const handleSelectSuggestion = (suggestion: AddressSuggestion) => {
     setAddress({
@@ -699,10 +703,20 @@ export default function CheckoutClient() {
                   placeholder="Search your address"
                   value={addressSearch}
                   onChange={(event) => {
-                    setAddressSearch(event.target.value);
+                    const nextValue = event.target.value;
+                    setAddressSearch(nextValue);
                     setManualSearch(true);
                     setCoords(null);
                     setSelectedAddress(null);
+                    setValidation({ status: "idle" });
+                    validationCache.current = null;
+                    setAddress({
+                      street: "",
+                      apt: "",
+                      city: "",
+                      state: "NJ",
+                      zip: "",
+                    });
                   }}
                   onFocus={() => setSearchFocused(true)}
                   onBlur={() => {
