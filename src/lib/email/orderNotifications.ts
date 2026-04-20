@@ -1,18 +1,10 @@
 import "server-only";
 
-import { FieldValue } from "firebase-admin/firestore";
-import { sendEmail } from "@/lib/email";
 import {
-  buildCustomerOrderEmail,
-  type CustomerOrderEmailMilestone,
-  type OrderEmailData,
-} from "@/lib/email/orders";
-
-type NotificationField =
-  | "orderReceivedSentAt"
-  | "readySentAt"
-  | "outForDeliverySentAt"
-  | "cancelledSentAt";
+  sendOrderNotification,
+} from "@/lib/notifications/sendOrderNotification";
+import type { CustomerOrderEmailMilestone, OrderEmailData } from "@/lib/email/orders";
+import type { OrderRefundStatus } from "@/lib/orders/types";
 
 type OrderNotificationOrder = Omit<OrderEmailData, "items"> & {
   items?: Array<{
@@ -21,20 +13,26 @@ type OrderNotificationOrder = Omit<OrderEmailData, "items"> & {
     price?: number;
   }>;
   notifications?: Record<string, unknown> | null;
+  alerts?: Record<string, unknown> | null;
+  refundStatus?: OrderRefundStatus | null;
 };
 
-function getNotificationField(
-  milestone: CustomerOrderEmailMilestone
-): NotificationField {
+function getEventKey(milestone: CustomerOrderEmailMilestone) {
   switch (milestone) {
     case "orderReceived":
-      return "orderReceivedSentAt";
+      return "ORDER_RECEIVED" as const;
+    case "paymentConfirmed":
+      return "PAYMENT_CONFIRMED" as const;
     case "ready":
-      return "readySentAt";
+      return "READY_FOR_PICKUP" as const;
     case "outForDelivery":
-      return "outForDeliverySentAt";
+      return "OUT_FOR_DELIVERY" as const;
+    case "completed":
+      return "ORDER_COMPLETED" as const;
     case "cancelled":
-      return "cancelledSentAt";
+      return "ORDER_CANCELLED" as const;
+    case "refundMarked":
+      return "REFUND_MARKED" as const;
   }
 }
 
@@ -49,73 +47,10 @@ export async function maybeSendCustomerOrderEmail({
   orderRef: FirebaseFirestore.DocumentReference;
   milestone: CustomerOrderEmailMilestone;
 }) {
-  if (process.env.ORDERS_EMAIL_ENABLED !== "true") return;
-
-  const notificationField = getNotificationField(milestone);
-  if (order.notifications?.[notificationField]) {
-    console.log("[orders_email_skipped_duplicate]", { orderId, milestone });
-    return;
-  }
-
-  const to = order.customer?.email ?? order.email ?? "";
-  const from =
-    process.env.STORE_ORDERS_EMAIL_FROM ??
-    process.env.SMTP_USER ??
-    "";
-
-  if (!to || !from) {
-    console.log("[orders_email_error]", {
-      orderId,
-      milestone,
-      reason: "missing_customer_email",
-    });
-    return;
-  }
-
-  const payload = buildCustomerOrderEmail(
-    {
-      ...order,
-      items: (order.items ?? []).map((item) => ({
-        name: item.name ?? "Item",
-        qty: item.qty,
-        price: item.price,
-      })),
-    },
-    milestone
-  );
-  const result = await sendEmail({
-    to,
-    from,
-    subject: payload.subject,
-    text: payload.text,
-    html: payload.html,
-  });
-
-  if (result.ok) {
-    await orderRef.set(
-      {
-        notifications: {
-          [notificationField]: FieldValue.serverTimestamp(),
-          emailLastError: FieldValue.delete(),
-        },
-      },
-      { merge: true }
-    );
-    console.log("[orders_email_sent]", { orderId, milestone });
-    return;
-  }
-
-  await orderRef.set(
-    {
-      notifications: {
-        emailLastError: result.error ?? "smtp_failed",
-      },
-    },
-    { merge: true }
-  );
-  console.log("[orders_email_error]", {
+  return sendOrderNotification({
     orderId,
-    milestone,
-    reason: result.error ?? "smtp_failed",
+    orderRef,
+    order,
+    eventKey: getEventKey(milestone),
   });
 }

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
-import { maybeSendCustomerOrderEmail } from "@/lib/email/orderNotifications";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
+import type { OrderNotifications } from "@/lib/orders/types";
+import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import { getStripe } from "@/lib/stripe";
 import { FINAL_ORDER_STATUSES, ORDER_STATUSES } from "@/lib/orders/status";
 
@@ -31,7 +32,7 @@ type OrderData = {
   subtotal?: number;
   tax?: number;
   tip?: number;
-  notifications?: Record<string, unknown> | null;
+  notifications?: OrderNotifications | null;
   stripe?: {
     paymentIntentId?: string;
     checkoutSessionId?: string;
@@ -188,7 +189,7 @@ export async function GET(request: Request) {
     }
   });
 
-  await maybeSendCustomerOrderEmail({
+  await sendOrderNotification({
     orderId,
     order: {
       ...order,
@@ -196,7 +197,7 @@ export async function GET(request: Request) {
       status: ORDER_STATUSES.NEW,
     },
     orderRef,
-    milestone: "orderReceived",
+    eventKey: "ORDER_RECEIVED",
   });
 
   console.log("[orders:verify]", {

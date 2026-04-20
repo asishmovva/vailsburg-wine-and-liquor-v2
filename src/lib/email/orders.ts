@@ -24,13 +24,17 @@ export type OrderEmailData = {
   customer?: { name?: string | null; phone?: string | null; email?: string | null };
   items?: OrderEmailItem[];
   cancellationReason?: string | null;
+  refundStatus?: string | null;
 };
 
 export type CustomerOrderEmailMilestone =
   | "orderReceived"
+  | "paymentConfirmed"
   | "ready"
   | "outForDelivery"
-  | "cancelled";
+  | "completed"
+  | "cancelled"
+  | "refundMarked";
 
 function formatMoney(value?: number) {
   return `$${(value ?? 0).toFixed(2)}`;
@@ -65,6 +69,16 @@ function normalizeSiteUrl(url?: string | null) {
 function getOrderLink(orderId: string) {
   const siteUrl = normalizeSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
   return siteUrl ? `${siteUrl}/orders/${orderId}` : "";
+}
+
+function getStoreContactFallback() {
+  return (
+    process.env.STORE_CONTACT_EMAIL ??
+    process.env.STORE_ORDERS_EMAIL_FROM ??
+    process.env.STORE_ORDERS_EMAIL_TO ??
+    process.env.SMTP_USER ??
+    ""
+  );
 }
 
 function getOrderSummaryLines(order: OrderEmailData) {
@@ -165,6 +179,7 @@ export function buildCustomerOrderEmail(
     status: order.status,
     fulfillment: order.fulfillment,
   });
+  const storeContact = getStoreContactFallback();
 
   const milestoneText = (() => {
     switch (milestone) {
@@ -176,6 +191,12 @@ export function buildCustomerOrderEmail(
             order.fulfillment === "delivery"
               ? "We have your delivery order and will keep you posted as it moves forward."
               : "We have your pickup order and will let you know when it is ready.",
+        };
+      case "paymentConfirmed":
+        return {
+          subject: `Payment confirmed - #${shortId}`,
+          heading: `Payment confirmed #${shortId}`,
+          message: "Your payment has been confirmed and your order is in progress.",
         };
       case "ready":
         return {
@@ -189,13 +210,32 @@ export function buildCustomerOrderEmail(
           heading: `Out for delivery #${shortId}`,
           message: "Your order is on the way.",
         };
+      case "completed":
+        return {
+          subject: `Order completed - #${shortId}`,
+          heading: `Order completed #${shortId}`,
+          message:
+            order.fulfillment === "delivery"
+              ? "Your delivery order has been marked complete."
+              : "Your pickup order has been marked complete.",
+        };
       case "cancelled":
         return {
           subject: `Order cancelled - #${shortId}`,
           heading: `Order cancelled #${shortId}`,
-          message: order.cancellationReason
-            ? `Your order was cancelled. Reason: ${order.cancellationReason}`
-            : "Your order was cancelled.",
+          message:
+            order.refundStatus === "refunded"
+              ? "Your order was cancelled. A refund has been marked on the order."
+              : "Your order was cancelled. If a refund applies, the store will follow up separately.",
+        };
+      case "refundMarked":
+        return {
+          subject: `Refund update - #${shortId}`,
+          heading: `Refund update #${shortId}`,
+          message:
+            order.refundStatus === "refunded"
+              ? "A refund has been marked on your order."
+              : "Your order refund is being reviewed by the store.",
         };
     }
   })();
@@ -214,6 +254,9 @@ export function buildCustomerOrderEmail(
           "Pickup at: Vailsburg Wine & Liquor",
           "Show this order at the counter when you arrive.",
         ];
+  const footerLines = [
+    storeContact ? `Need help? Contact us at ${storeContact}` : undefined,
+  ].filter((line): line is string => Boolean(line));
 
   const text = [
     `Hi ${customerName},`,
@@ -228,6 +271,7 @@ export function buildCustomerOrderEmail(
     order.fulfillment === "delivery" ? `Address: ${address}` : undefined,
     "",
     ...instructionLines,
+    ...footerLines,
     orderLink ? "" : undefined,
     orderLink ? `View your order: ${orderLink}` : undefined,
   ]
@@ -247,6 +291,7 @@ export function buildCustomerOrderEmail(
     <ul>${htmlItems}</ul>
     ${order.fulfillment === "delivery" ? `<p><strong>Address:</strong> ${address}</p>` : ""}
     <p>${instructionLines.join("<br />")}</p>
+    ${footerLines.length > 0 ? `<p>${footerLines.join("<br />")}</p>` : ""}
     ${orderLink ? `<p><a href="${orderLink}">View your order</a></p>` : ""}
   `.trim();
 

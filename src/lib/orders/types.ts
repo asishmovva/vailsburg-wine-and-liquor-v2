@@ -35,7 +35,33 @@ export type OrderCustomer = {
   email?: string | null;
 };
 
+export type OrderNotificationSendStatus =
+  | "sent"
+  | "failed"
+  | "skipped_duplicate";
+
+export type OrderNotificationStateRecord = {
+  sentAt?: unknown;
+  provider?: string | null;
+  messageId?: string | null;
+  lastStatus?: OrderNotificationSendStatus | null;
+  lastError?: string | null;
+  lastAttemptAt?: unknown;
+  lastManualResendAt?: unknown;
+  lastManualProvider?: string | null;
+  lastManualMessageId?: string | null;
+  resendCount?: number;
+};
+
 export type OrderNotifications = {
+  orderReceived?: OrderNotificationStateRecord | null;
+  paymentConfirmed?: OrderNotificationStateRecord | null;
+  readyForPickup?: OrderNotificationStateRecord | null;
+  outForDelivery?: OrderNotificationStateRecord | null;
+  completed?: OrderNotificationStateRecord | null;
+  cancelled?: OrderNotificationStateRecord | null;
+  refundMarked?: OrderNotificationStateRecord | null;
+  adminNewOrderAlert?: OrderNotificationStateRecord | null;
   orderReceivedSentAt?: unknown;
   readySentAt?: unknown;
   outForDeliverySentAt?: unknown;
@@ -90,6 +116,10 @@ export type OrderRecord = {
   stripe?: {
     paymentIntentId?: string | null;
     checkoutSessionId?: string | null;
+  } | null;
+  alerts?: {
+    emailSentAt?: unknown;
+    emailLastError?: string | null;
   } | null;
   refundStatus?: OrderRefundStatus | null;
   refundNote?: string | null;

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { maybeSendCustomerOrderEmail } from "@/lib/email/orderNotifications";
+import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import {
   ADMIN_ORDER_STATUSES,
   canTransitionAdminOrderStatus,
@@ -9,6 +9,7 @@ import {
 } from "@/lib/orders/adminStatusTransitions";
 import type {
   OrderAdminHistoryEntry,
+  OrderNotifications,
   OrderRefundStatus,
 } from "@/lib/orders/types";
 import { requireAdmin } from "@/lib/server/requireAdmin";
@@ -56,7 +57,7 @@ type OrderData = {
     image?: string | null;
     category?: string;
   }>;
-  notifications?: Record<string, unknown> | null;
+  notifications?: OrderNotifications | null;
   adminHistory?: OrderAdminHistoryEntry[] | null;
   refundStatus?: OrderRefundStatus | null;
   refundNote?: string | null;
@@ -274,44 +275,86 @@ export async function POST(
       );
   }
 
+  const notificationTasks: Promise<unknown>[] = [];
+
   if (nextStatus === ADMIN_ORDER_STATUSES.READY_FOR_PICKUP) {
-    await maybeSendCustomerOrderEmail({
-      orderId,
-      order: {
-        ...orderAfterUpdate,
-        id: orderId,
-        status: nextStatus,
-      },
-      orderRef,
-      milestone: "ready",
-    });
+    notificationTasks.push(
+      sendOrderNotification({
+        orderId,
+        order: {
+          ...orderAfterUpdate,
+          id: orderId,
+          status: nextStatus,
+        },
+        orderRef,
+        eventKey: "READY_FOR_PICKUP",
+      })
+    );
   }
 
   if (nextStatus === ADMIN_ORDER_STATUSES.OUT_FOR_DELIVERY) {
-    await maybeSendCustomerOrderEmail({
-      orderId,
-      order: {
-        ...orderAfterUpdate,
-        id: orderId,
-        status: nextStatus,
-      },
-      orderRef,
-      milestone: "outForDelivery",
-    });
+    notificationTasks.push(
+      sendOrderNotification({
+        orderId,
+        order: {
+          ...orderAfterUpdate,
+          id: orderId,
+          status: nextStatus,
+        },
+        orderRef,
+        eventKey: "OUT_FOR_DELIVERY",
+      })
+    );
   }
 
   if (nextStatus === ADMIN_ORDER_STATUSES.CANCELLED) {
-    await maybeSendCustomerOrderEmail({
-      orderId,
-      order: {
-        ...orderAfterUpdate,
-        id: orderId,
-        status: nextStatus,
-        cancellationReason: reason ?? orderAfterUpdate.cancellationReason ?? null,
-      },
-      orderRef,
-      milestone: "cancelled",
-    });
+    notificationTasks.push(
+      sendOrderNotification({
+        orderId,
+        order: {
+          ...orderAfterUpdate,
+          id: orderId,
+          status: nextStatus,
+          cancellationReason: reason ?? orderAfterUpdate.cancellationReason ?? null,
+        },
+        orderRef,
+        eventKey: "ORDER_CANCELLED",
+      })
+    );
+  }
+
+  if (nextStatus === ADMIN_ORDER_STATUSES.COMPLETED) {
+    notificationTasks.push(
+      sendOrderNotification({
+        orderId,
+        order: {
+          ...orderAfterUpdate,
+          id: orderId,
+          status: nextStatus,
+        },
+        orderRef,
+        eventKey: "ORDER_COMPLETED",
+      })
+    );
+  }
+
+  if (refundStatus === "refunded") {
+    notificationTasks.push(
+      sendOrderNotification({
+        orderId,
+        order: {
+          ...orderAfterUpdate,
+          id: orderId,
+          refundStatus,
+        },
+        orderRef,
+        eventKey: "REFUND_MARKED",
+      })
+    );
+  }
+
+  if (notificationTasks.length > 0) {
+    await Promise.allSettled(notificationTasks);
   }
 
   return NextResponse.json({
