@@ -205,8 +205,8 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
 
       {normalizedStatus === ORDER_STATUSES.CANCELLED ? (
         <Card className="border-red-200 bg-red-50 text-sm text-red-700">
-          This order was cancelled.
-          {order.cancellationReason ? ` Reason: ${order.cancellationReason}` : ""}
+          This order was cancelled. If you already paid, the store will follow up
+          with next steps for pickup, delivery, or refund handling.
         </Card>
       ) : null}
 

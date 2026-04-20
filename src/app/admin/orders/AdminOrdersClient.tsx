@@ -14,69 +14,65 @@ import { Input } from "@/components/ui/Input";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useRole } from "@/hooks/useRole";
-import { ORDER_STATUSES } from "@/lib/orders/status";
+import {
+  ADMIN_ORDER_STATUSES,
+  ADMIN_STATUS_LABELS,
+  getAdminPrimaryActionLabel,
+  getAllowedNextStatuses,
+  isFinalAdminOrderStatus,
+  normalizeAdminOrderStatus,
+  type AdminOrderStatus,
+} from "@/lib/orders/adminStatusTransitions";
+import type {
+  OrderAdminHistoryEntry,
+  OrderRecord,
+  OrderRefundStatus,
+} from "@/lib/orders/types";
 import { orderNumberFromId } from "@/utils/order";
 
-type OrderItem = {
-  productId: string;
-  name: string;
-  price: number;
-  qty: number;
-  image?: string | null;
-  category?: string;
-};
-
-type OrderRecord = {
-  id: string;
-  orderId?: string;
-  status?: string;
-  createdAt?: unknown;
-  fulfillment?: "delivery" | "pickup";
-  delivery?: { address: string; miles?: number; eligible?: boolean } | null;
-  total?: number;
-  subtotal?: number;
-  tip?: number;
-  tax?: number;
-  email?: string | null;
-  phone?: string | null;
-  customer?: { name?: string | null; phone?: string | null; email?: string | null };
-  items?: OrderItem[];
-  cancellationReason?: string | null;
-  statusNote?: string | null;
-};
-
-const STATUS_TABS = [
-  ORDER_STATUSES.NEW,
-  ORDER_STATUSES.ACCEPTED,
-  ORDER_STATUSES.READY,
-  ORDER_STATUSES.COMPLETED,
-  ORDER_STATUSES.CANCELLED,
+const STATUS_TABS: AdminOrderStatus[] = [
+  ADMIN_ORDER_STATUSES.PENDING_STORE,
+  ADMIN_ORDER_STATUSES.PREPARING,
+  ADMIN_ORDER_STATUSES.READY_FOR_PICKUP,
+  ADMIN_ORDER_STATUSES.OUT_FOR_DELIVERY,
+  ADMIN_ORDER_STATUSES.COMPLETED,
+  ADMIN_ORDER_STATUSES.CANCELLED,
 ];
 
-const STATUS_LABELS: Record<string, string> = {
-  [ORDER_STATUSES.NEW]: "New",
-  [ORDER_STATUSES.ACCEPTED]: "Accepted",
-  [ORDER_STATUSES.READY]: "Ready",
-  [ORDER_STATUSES.COMPLETED]: "Completed",
-  [ORDER_STATUSES.CANCELLED]: "Cancelled",
-};
-
-const STATUS_STYLES: Record<string, string> = {
-  [ORDER_STATUSES.NEW]: "bg-emerald-100 text-emerald-700",
-  [ORDER_STATUSES.ACCEPTED]: "bg-blue-100 text-blue-700",
-  [ORDER_STATUSES.READY]: "bg-amber-100 text-amber-700",
-  [ORDER_STATUSES.COMPLETED]: "bg-zinc-200 text-zinc-700",
-  [ORDER_STATUSES.CANCELLED]: "bg-red-100 text-red-700",
+const STATUS_STYLES: Record<AdminOrderStatus, string> = {
+  [ADMIN_ORDER_STATUSES.PENDING_STORE]: "bg-emerald-100 text-emerald-700",
+  [ADMIN_ORDER_STATUSES.PREPARING]: "bg-blue-100 text-blue-700",
+  [ADMIN_ORDER_STATUSES.READY_FOR_PICKUP]: "bg-amber-100 text-amber-700",
+  [ADMIN_ORDER_STATUSES.OUT_FOR_DELIVERY]: "bg-violet-100 text-violet-700",
+  [ADMIN_ORDER_STATUSES.COMPLETED]: "bg-zinc-200 text-zinc-700",
+  [ADMIN_ORDER_STATUSES.CANCELLED]: "bg-red-100 text-red-700",
 };
 
 const NEW_PULSE_MS = 30000;
 const DELAYED_MINUTES = 15;
+const POLL_INTERVAL_MS = 15000;
+const STALE_AFTER_MS = 45000;
+
 const CANCEL_PRESETS = [
-  { label: "Out of stock", value: "Out of stock" },
-  { label: "Customer unreachable", value: "Customer unreachable" },
-  { label: "Store closing", value: "Store closing" },
-  { label: "Other", value: "Other" },
-];
+  "Customer requested cancellation",
+  "Out of stock",
+  "Store unable to fulfill",
+  "Delivery issue",
+  "Duplicate order",
+  "Other",
+] as const;
+
+type PendingAction = {
+  orderId: string;
+  action: string;
+};
+
+type MutationPayload = {
+  status?: string;
+  reason?: string;
+  refundStatus?: OrderRefundStatus;
+  refundNote?: string;
+};
 
 function formatMoney(value?: number) {
   return `$${(value ?? 0).toFixed(2)}`;
@@ -86,15 +82,21 @@ function parseDate(value?: unknown) {
   if (!value) return null;
   if (value instanceof Date) return value;
   if (typeof value === "string") {
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
-  const seconds = (value as { _seconds?: number; seconds?: number })._seconds ??
+  const seconds =
+    (value as { _seconds?: number; seconds?: number })._seconds ??
     (value as { seconds?: number }).seconds;
   if (typeof seconds === "number") {
     return new Date(seconds * 1000);
   }
   return null;
+}
+
+function formatDateTime(value?: unknown) {
+  const parsed = parseDate(value);
+  return parsed ? parsed.toLocaleString() : "-";
 }
 
 function formatTimeAgo(date?: Date | null) {
@@ -109,38 +111,83 @@ function formatTimeAgo(date?: Date | null) {
 }
 
 function getCustomerDisplay(order: OrderRecord) {
-  const name = order.customer?.name ?? order.email ?? "Customer";
-  const phone = order.customer?.phone ?? order.phone ?? "-";
-  const email = order.customer?.email ?? order.email ?? "-";
-  return { name, phone, email };
+  return {
+    name: order.customer?.name ?? order.email ?? "Customer",
+    phone: order.customer?.phone ?? order.phone ?? "-",
+    email: order.customer?.email ?? order.email ?? "-",
+  };
 }
 
-type PrimaryAction = { label: string; nextStatus: string };
-
-function getPrimaryAction(status: string): PrimaryAction | null {
-  switch (status) {
-    case ORDER_STATUSES.NEW:
-      return { label: "Accept", nextStatus: ORDER_STATUSES.ACCEPTED };
-    case ORDER_STATUSES.ACCEPTED:
-      return { label: "Ready", nextStatus: ORDER_STATUSES.READY };
-    case ORDER_STATUSES.READY:
-      return { label: "Complete", nextStatus: ORDER_STATUSES.COMPLETED };
-    default:
-      return null;
-  }
+function isPaidOrder(order: OrderRecord) {
+  return Boolean(order.paidAt || order.paid);
 }
 
-function isFinalStatus(status: string) {
+function getNormalizedStatus(order: OrderRecord) {
   return (
-    status === ORDER_STATUSES.COMPLETED ||
-    status === ORDER_STATUSES.CANCELLED
+    normalizeAdminOrderStatus(order.status) ?? ADMIN_ORDER_STATUSES.PENDING_STORE
   );
+}
+
+function getPrimaryAction(order: OrderRecord) {
+  const nextStatuses = getAllowedNextStatuses({
+    currentStatus: order.status,
+    fulfillment: order.fulfillment,
+  });
+  const nextStatus = nextStatuses.find(
+    (status) => status !== ADMIN_ORDER_STATUSES.CANCELLED
+  );
+  const label = getAdminPrimaryActionLabel({
+    currentStatus: order.status,
+    fulfillment: order.fulfillment,
+  });
+
+  if (!nextStatus || !label) return null;
+  return { label, nextStatus };
+}
+
+function canCancelOrder(order: OrderRecord) {
+  return getAllowedNextStatuses({
+    currentStatus: order.status,
+    fulfillment: order.fulfillment,
+  }).includes(ADMIN_ORDER_STATUSES.CANCELLED);
+}
+
+function getRefundActions(order: OrderRecord) {
+  const normalizedStatus = getNormalizedStatus(order);
+  if (normalizedStatus !== ADMIN_ORDER_STATUSES.CANCELLED || !isPaidOrder(order)) {
+    return {
+      canMarkPending: false,
+      canMarkRefunded: false,
+    };
+  }
+
+  return {
+    canMarkPending: order.refundStatus !== "manual_pending" && order.refundStatus !== "refunded",
+    canMarkRefunded: order.refundStatus !== "refunded",
+  };
+}
+
+function getHistoryLabel(entry: OrderAdminHistoryEntry) {
+  switch (entry.action) {
+    case "cancel":
+      return "Cancelled order";
+    case "refund_marked":
+      return `Refund ${entry.to?.replace("_", " ") ?? "updated"}`;
+    case "note_added":
+      return "Added note";
+    case "status_change":
+    default:
+      return `Changed status to ${entry.to ?? "updated"}`;
+  }
 }
 
 export default function AdminOrdersClient() {
   const { user, loading } = useAuth();
   const { role, loading: roleLoading } = useRole(user);
-  const [activeStatus, setActiveStatus] = useState<string>(ORDER_STATUSES.NEW);
+
+  const [activeStatus, setActiveStatus] = useState<AdminOrderStatus>(
+    ADMIN_ORDER_STATUSES.PENDING_STORE
+  );
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,19 +198,17 @@ export default function AdminOrdersClient() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<OrderRecord | null>(null);
   const [cancelReason, setCancelReason] = useState("");
-  const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelPreset, setCancelPreset] = useState<string>("");
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<{
-    orderId: string;
-    action: string;
-  } | null>(null);
-
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [alertsEnabled, setAlertsEnabled] = useState(false);
   const [alertsMuted, setAlertsMuted] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState<
     NotificationPermission | "unsupported"
   >("default");
+  const [printOrderId, setPrintOrderId] = useState<string | null>(null);
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const knownIdsRef = useRef<Set<string>>(new Set());
   const initialLoadedRef = useRef(false);
@@ -178,10 +223,18 @@ export default function AdminOrdersClient() {
     setNotificationStatus(Notification.permission);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const resetPrintMode = () => setPrintOrderId(null);
+    window.addEventListener("afterprint", resetPrintMode);
+    return () => window.removeEventListener("afterprint", resetPrintMode);
+  }, []);
+
   const playBeep = useCallback(() => {
     if (alertsMuted) return;
     const ctx = audioContextRef.current;
     if (!ctx) return;
+
     const oscillator = ctx.createOscillator();
     const gain = ctx.createGain();
     oscillator.frequency.value = 880;
@@ -198,6 +251,7 @@ export default function AdminOrdersClient() {
       toast.error("Browser notifications are not supported.");
       return;
     }
+
     if (notificationStatus !== "granted") {
       const permission = await Notification.requestPermission();
       setNotificationStatus(permission);
@@ -208,14 +262,19 @@ export default function AdminOrdersClient() {
     }
 
     if (!audioContextRef.current) {
-      const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext ||
+        (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
       if (AudioCtx) {
         audioContextRef.current = new AudioCtx();
       }
     }
+
     if (audioContextRef.current?.state === "suspended") {
       await audioContextRef.current.resume();
     }
+
     playBeep();
     setAlertsEnabled(true);
     toast.success("Alerts enabled.");
@@ -223,25 +282,30 @@ export default function AdminOrdersClient() {
 
   const fetchOrders = useCallback(async () => {
     if (!user) return;
+
     setError(null);
     try {
       const token = await user.getIdToken();
       const response = await fetch(`/api/admin/orders?status=${activeStatus}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+
       if (!response.ok) {
         const payload = (await response.json()) as { error?: string };
         throw new Error(payload.error ?? "Unable to load orders.");
       }
+
       const payload = (await response.json()) as { orders?: OrderRecord[] };
       const data = (payload.orders ?? []).map((order) => ({
         ...order,
         id: order.id ?? order.orderId ?? "",
+        items: order.items ?? [],
+        adminHistory: order.adminHistory ?? [],
       }));
       setOrders(data);
       setLastUpdated(new Date());
 
-      if (activeStatus === ORDER_STATUSES.NEW && alertsEnabled) {
+      if (activeStatus === ADMIN_ORDER_STATUSES.PENDING_STORE && alertsEnabled) {
         const currentIds = new Set(data.map((order) => order.id));
         if (initialLoadedRef.current) {
           const newOrders = data.filter((order) => !knownIdsRef.current.has(order.id));
@@ -249,7 +313,9 @@ export default function AdminOrdersClient() {
             const latest = newOrders[0];
             if (notificationStatus === "granted") {
               new Notification("New order received", {
-                body: `${formatMoney(latest.total)} - ${latest.fulfillment ?? "pickup"}`,
+                body: `${formatMoney(latest.total)} - ${
+                  latest.fulfillment ?? "pickup"
+                }`,
               });
             }
             playBeep();
@@ -261,8 +327,8 @@ export default function AdminOrdersClient() {
         knownIdsRef.current = new Set(data.map((order) => order.id));
         initialLoadedRef.current = true;
       }
-    } catch (err) {
-      setError((err as Error).message ?? "Unable to load orders.");
+    } catch (fetchError) {
+      setError((fetchError as Error).message ?? "Unable to load orders.");
     } finally {
       setLastPollAt(new Date());
       setLoadingOrders(false);
@@ -273,7 +339,7 @@ export default function AdminOrdersClient() {
     if (!user || roleLoading || role !== "admin") return;
     setLoadingOrders(true);
     fetchOrders();
-    const interval = setInterval(fetchOrders, 15000);
+    const interval = setInterval(fetchOrders, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchOrders, role, roleLoading, user]);
 
@@ -283,7 +349,7 @@ export default function AdminOrdersClient() {
         setPollStale(false);
         return;
       }
-      const stale = Date.now() - lastPollAt.getTime() > 45000;
+      const stale = Date.now() - lastPollAt.getTime() > STALE_AFTER_MS;
       setPollStale(stale);
       if (stale && alertsEnabled && !alertsMuted) {
         const now = Date.now();
@@ -293,20 +359,9 @@ export default function AdminOrdersClient() {
         }
       }
     }, 5000);
+
     return () => clearInterval(interval);
   }, [alertsEnabled, alertsMuted, lastPollAt, playBeep]);
-
-  const handleTestAlert = async () => {
-    if (!alertsEnabled) {
-      await enableAlerts();
-    }
-    if (notificationStatus === "granted") {
-      new Notification("Order alerts test", {
-        body: "Notifications are enabled for new orders.",
-      });
-    }
-    playBeep();
-  };
 
   useEffect(() => {
     if (!pendingAction) return;
@@ -316,9 +371,18 @@ export default function AdminOrdersClient() {
     return () => clearTimeout(timeout);
   }, [pendingAction]);
 
-  const handleStatusChange = useCallback(
-    async (orderId: string, status: string, reason?: string) => {
-      if (!user) return;
+  const performMutation = useCallback(
+    async ({
+      orderId,
+      payload,
+      successMessage,
+    }: {
+      orderId: string;
+      payload: MutationPayload;
+      successMessage: string;
+    }) => {
+      if (!user) return false;
+
       setUpdatingId(orderId);
       try {
         const token = await user.getIdToken();
@@ -328,52 +392,120 @@ export default function AdminOrdersClient() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ status, reason }),
+          body: JSON.stringify(payload),
         });
+
         if (!response.ok) {
-          const payload = (await response.json()) as { error?: string };
-          throw new Error(payload.error ?? "Unable to update status.");
+          const result = (await response.json()) as { error?: string };
+          throw new Error(result.error ?? "Unable to update order.");
         }
-        setOrders((prev) =>
-          prev.map((order) =>
-            order.id === orderId
-              ? {
-                  ...order,
-                  status,
-                  cancellationReason:
-                    status === ORDER_STATUSES.CANCELLED
-                      ? reason ?? order.cancellationReason ?? null
-                      : order.cancellationReason,
-                }
-              : order
-          )
-        );
-        toast.success(`Order ${STATUS_LABELS[status] ?? status}`);
-      } catch (err) {
-        toast.error((err as Error).message ?? "Unable to update order.");
+
+        toast.success(successMessage);
+        await fetchOrders();
+        return true;
+      } catch (mutationError) {
+        toast.error((mutationError as Error).message ?? "Unable to update order.");
+        return false;
       } finally {
         setUpdatingId(null);
+        setPendingAction(null);
       }
     },
-    [user]
+    [fetchOrders, user]
+  );
+
+  const handlePrimaryAction = useCallback(
+    async (order: OrderRecord) => {
+      const primaryAction = getPrimaryAction(order);
+      if (!primaryAction) return;
+
+      const needsConfirmation =
+        primaryAction.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED;
+      const actionKey = `status:${primaryAction.nextStatus}`;
+
+      if (
+        needsConfirmation &&
+        !(
+          pendingAction?.orderId === order.id &&
+          pendingAction.action === actionKey
+        )
+      ) {
+        setPendingAction({ orderId: order.id, action: actionKey });
+        return;
+      }
+
+      await performMutation({
+        orderId: order.id,
+        payload: { status: primaryAction.nextStatus },
+        successMessage: primaryAction.label,
+      });
+    },
+    [pendingAction, performMutation]
+  );
+
+  const handleRefundAction = useCallback(
+    async (order: OrderRecord, refundStatus: OrderRefundStatus) => {
+      const needsConfirmation = refundStatus === "refunded";
+      const actionKey = `refund:${refundStatus}`;
+
+      if (
+        needsConfirmation &&
+        !(
+          pendingAction?.orderId === order.id &&
+          pendingAction.action === actionKey
+        )
+      ) {
+        setPendingAction({ orderId: order.id, action: actionKey });
+        return;
+      }
+
+      await performMutation({
+        orderId: order.id,
+        payload: {
+          refundStatus,
+          refundNote:
+            refundStatus === "manual_pending"
+              ? "Refund pending review"
+              : "Refund completed",
+        },
+        successMessage:
+          refundStatus === "manual_pending"
+            ? "Refund marked pending"
+            : "Refund marked complete",
+      });
+    },
+    [pendingAction, performMutation]
   );
 
   const handleCancelConfirm = async () => {
     if (!cancelTarget) return;
+
     if (!cancelReason.trim()) {
       setCancelError("Please provide a cancellation reason.");
       return;
     }
+
     setCancelError(null);
-    await handleStatusChange(cancelTarget.id, ORDER_STATUSES.CANCELLED, cancelReason.trim());
-    setCancelTarget(null);
-    setCancelReason("");
-    setCancelPreset("");
+    const success = await performMutation({
+      orderId: cancelTarget.id,
+      payload: {
+        status: ADMIN_ORDER_STATUSES.CANCELLED,
+        reason: cancelReason.trim(),
+      },
+      successMessage: "Order cancelled",
+    });
+
+    if (success) {
+      setCancelTarget(null);
+      setCancelReason("");
+      setCancelPreset("");
+    }
   };
 
   const filteredOrders = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return orders;
+
     return orders.filter((order) => {
       const customer = getCustomerDisplay(order);
       return (
@@ -392,53 +524,57 @@ export default function AdminOrdersClient() {
 
   const showMobileActionBar = useMemo(() => {
     if (!activeMobileOrder) return false;
-    const status = activeMobileOrder.status ?? ORDER_STATUSES.NEW;
-    const hasPrimary = Boolean(getPrimaryAction(status));
-    const canCancel = status === ORDER_STATUSES.NEW;
-    return hasPrimary || canCancel;
+    const refundActions = getRefundActions(activeMobileOrder);
+    return Boolean(
+      getPrimaryAction(activeMobileOrder) ||
+        canCancelOrder(activeMobileOrder) ||
+        refundActions.canMarkPending ||
+        refundActions.canMarkRefunded
+    );
   }, [activeMobileOrder]);
 
   const handleCardToggle = useCallback(
     (event: MouseEvent<HTMLDivElement>, orderId: string) => {
-      if (typeof window === "undefined") return;
-      if (window.innerWidth >= 640) return;
+      if (typeof window === "undefined" || window.innerWidth >= 640) return;
       const target = event.target as HTMLElement;
       if (target.closest("button, a, textarea, input, label")) return;
+      setExpandedOrderId((current) => (current === orderId ? null : orderId));
       setPendingAction(null);
-      setExpandedOrderId((prev) => (prev === orderId ? null : orderId));
     },
     []
   );
 
-  const handlePrimaryAction = useCallback(
-    (orderId: string, nextStatus: string) => {
-      if (pendingAction?.orderId === orderId && pendingAction.action === nextStatus) {
-        setPendingAction(null);
-        handleStatusChange(orderId, nextStatus);
-        return;
-      }
-      setPendingAction({ orderId, action: nextStatus });
-    },
-    [handleStatusChange, pendingAction]
-  );
+  const handleTestAlert = async () => {
+    if (!alertsEnabled) {
+      await enableAlerts();
+    }
+
+    if (notificationStatus === "granted") {
+      new Notification("Order alerts test", {
+        body: "Notifications are enabled for new orders.",
+      });
+    }
+    playBeep();
+  };
+
+  const handlePrint = useCallback((orderId: string) => {
+    if (typeof window === "undefined") return;
+    setExpandedOrderId(orderId);
+    setPrintOrderId(orderId);
+    window.setTimeout(() => window.print(), 100);
+  }, []);
 
   if (loading || roleLoading) {
-    return (
-      <Card className="p-6 text-sm text-zinc-600">Loading admin view...</Card>
-    );
+    return <Card className="p-6 text-sm text-zinc-600">Loading admin view...</Card>;
   }
 
   if (!user || role !== "admin") {
-    return (
-      <Card className="p-6 text-sm text-zinc-600">Not authorized.</Card>
-    );
+    return <Card className="p-6 text-sm text-zinc-600">Not authorized.</Card>;
   }
 
   return (
-    <div
-      className={`space-y-6 ${showMobileActionBar ? "pb-24 sm:pb-0" : ""}`}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className={`space-y-6 ${showMobileActionBar ? "pb-28 sm:pb-0" : ""}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold text-zinc-900">Admin Orders</h1>
@@ -446,19 +582,15 @@ export default function AdminOrdersClient() {
               Admin Mode
             </span>
           </div>
-          <p className="text-sm text-zinc-600">
-            Live queue for staff processing.
-          </p>
+          <p className="text-sm text-zinc-600">Live queue for staff processing.</p>
         </div>
         <div className="space-y-1 text-right text-xs text-zinc-500">
           <p>Polling every 15s</p>
-          <p>
-            Last updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : "-"}
-          </p>
+          <p>Last updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : "-"}</p>
         </div>
       </div>
 
-      <Card className="space-y-4">
+      <Card className="space-y-4 print:hidden">
         <div className="flex flex-wrap items-center gap-2">
           {STATUS_TABS.map((status) => (
             <button
@@ -476,21 +608,18 @@ export default function AdminOrdersClient() {
                   : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200"
               }`}
             >
-              {STATUS_LABELS[status]}
+              {ADMIN_STATUS_LABELS[status]}
             </button>
           ))}
         </div>
+
         <div className="flex flex-wrap items-center gap-2">
           <Input
             placeholder="Search by order id or phone"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Button
-            variant="outline"
-            onClick={enableAlerts}
-            disabled={alertsEnabled}
-          >
+          <Button variant="outline" onClick={enableAlerts} disabled={alertsEnabled}>
             {alertsEnabled ? "Alerts enabled" : "Enable alerts"}
           </Button>
           <Button
@@ -502,12 +631,13 @@ export default function AdminOrdersClient() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => setAlertsMuted((prev) => !prev)}
+            onClick={() => setAlertsMuted((current) => !current)}
             disabled={!alertsEnabled}
           >
             {alertsMuted ? "Unmute" : "Mute"}
           </Button>
         </div>
+
         <p className="text-xs text-zinc-500">
           Notification permission: {notificationStatus}
         </p>
@@ -519,8 +649,8 @@ export default function AdminOrdersClient() {
       </Card>
 
       {pollStale ? (
-        <Card className="border-red-200 bg-red-50 text-sm text-red-700">
-          Updates paused—refresh tab.
+        <Card className="border-red-200 bg-red-50 text-sm text-red-700 print:hidden">
+          Updates paused - refresh tab.
         </Card>
       ) : null}
 
@@ -528,9 +658,7 @@ export default function AdminOrdersClient() {
         <Card className="p-6 text-sm text-zinc-600">Loading orders...</Card>
       ) : null}
 
-      {error ? (
-        <Card className="p-6 text-sm text-red-600">{error}</Card>
-      ) : null}
+      {error ? <Card className="p-6 text-sm text-red-600">{error}</Card> : null}
 
       {!loadingOrders && filteredOrders.length === 0 ? (
         <Card className="p-6 text-sm text-zinc-600">
@@ -540,72 +668,91 @@ export default function AdminOrdersClient() {
 
       <div className="space-y-4">
         {filteredOrders.map((order) => {
-          const status = order.status ?? ORDER_STATUSES.NEW;
+          const normalizedStatus = getNormalizedStatus(order);
           const createdAt = parseDate(order.createdAt);
           const customer = getCustomerDisplay(order);
-          const items = order.items ?? [];
           const isExpanded = expandedOrderId === order.id;
-          const primaryAction = getPrimaryAction(status);
-          const isNewPulse = Boolean(
-            status === ORDER_STATUSES.NEW &&
-              createdAt &&
-              Date.now() - createdAt.getTime() < NEW_PULSE_MS
-          );
-          const isDelayed = Boolean(
-            createdAt &&
-              !isFinalStatus(status) &&
-              Date.now() - createdAt.getTime() > DELAYED_MINUTES * 60 * 1000
-          );
+          const primaryAction = getPrimaryAction(order);
+          const canCancel = canCancelOrder(order);
+          const refundActions = getRefundActions(order);
           const deliveryAddress =
             order.fulfillment === "delivery" ? order.delivery?.address : null;
+          const phoneHref =
+            customer.phone && customer.phone !== "-" ? `tel:${customer.phone}` : "";
           const mapHref = deliveryAddress
             ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
                 deliveryAddress
               )}`
             : "";
-          const phoneHref =
-            customer.phone && customer.phone !== "-" ? `tel:${customer.phone}` : "";
           const showItems = isExpanded;
+          const pendingStatusKey = primaryAction
+            ? `status:${primaryAction.nextStatus}`
+            : "";
+          const pendingRefundKey = "refund:refunded";
+          const isPendingConfirmation =
+            pendingAction?.orderId === order.id ? pendingAction.action : null;
+          const historyEntries = [...(order.adminHistory ?? [])]
+            .reverse()
+            .slice(0, 5);
+
           return (
             <Card
               key={order.id}
-              className={`space-y-4 ${isExpanded ? "ring-1 ring-zinc-200" : ""} cursor-pointer sm:cursor-default`}
+              className={`${printOrderId && printOrderId !== order.id ? "print:hidden" : ""} ${
+                isExpanded ? "ring-1 ring-zinc-200" : ""
+              } cursor-pointer sm:cursor-default print:cursor-default print:border-0 print:p-0 print:shadow-none print:ring-0`}
               onClick={(event) => handleCardToggle(event, order.id)}
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                    {isNewPulse ? (
-                      <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                    {normalizedStatus === ADMIN_ORDER_STATUSES.PENDING_STORE &&
+                    createdAt &&
+                    Date.now() - createdAt.getTime() < NEW_PULSE_MS ? (
+                      <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse print:hidden" />
                     ) : null}
                     <span>Order #{orderNumberFromId(order.id)}</span>
-                    {isDelayed ? (
+                    {createdAt &&
+                    !isFinalAdminOrderStatus(order.status) &&
+                    Date.now() - createdAt.getTime() > DELAYED_MINUTES * 60 * 1000 ? (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                         Delayed
                       </span>
                     ) : null}
                   </div>
+
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-base font-semibold text-zinc-900">
                       {customer.name}
                     </h3>
-                    <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 capitalize">
+                    <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold capitalize text-zinc-700">
                       {order.fulfillment ?? "pickup"}
                     </span>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                        STATUS_STYLES[normalizedStatus]
+                      }`}
+                    >
+                      {ADMIN_STATUS_LABELS[normalizedStatus]}
+                    </span>
+                    {order.refundStatus ? (
+                      <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700">
+                        Refund: {order.refundStatus.replace("_", " ")}
+                      </span>
+                    ) : null}
                   </div>
+
                   <p className="text-xs text-zinc-500">
-                    {createdAt ? createdAt.toLocaleString() : "-"} |{" "}
-                    {formatTimeAgo(createdAt)}
+                    {formatDateTime(order.createdAt)} | {formatTimeAgo(createdAt)}
                   </p>
                 </div>
+
                 <div className="flex items-center justify-between gap-3 sm:flex-col sm:items-end">
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${STATUS_STYLES[status] ?? "bg-zinc-100 text-zinc-700"}`}
-                  >
-                    {STATUS_LABELS[status] ?? status}
-                  </span>
                   <p className="text-lg font-semibold text-zinc-900">
                     {formatMoney(order.total)}
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    Payment: {isPaidOrder(order) ? "Paid" : "Pending"}
                   </p>
                 </div>
               </div>
@@ -626,6 +773,7 @@ export default function AdminOrdersClient() {
                       <p>-</p>
                     )}
                   </div>
+
                   {deliveryAddress ? (
                     <div className="space-y-1">
                       <p className="text-xs font-semibold text-zinc-900">
@@ -646,36 +794,44 @@ export default function AdminOrdersClient() {
                     </div>
                   ) : null}
                 </div>
+
                 <div className="space-y-1 text-sm text-zinc-600 sm:text-right">
                   <p>Subtotal {formatMoney(order.subtotal)}</p>
-                  <p>
-                    Tip {formatMoney(order.tip)} | Tax {formatMoney(order.tax)}
-                  </p>
+                  <p>Tax {formatMoney(order.tax)} | Tip {formatMoney(order.tip)}</p>
+                  <p>Fulfillment status: {ADMIN_STATUS_LABELS[normalizedStatus]}</p>
                 </div>
               </div>
 
-              {!showItems && items.length > 0 ? (
+              {!showItems && (order.items?.length ?? 0) > 0 ? (
                 <p className="text-xs text-zinc-500 sm:hidden">
-                  Tap to view {items.length} item{items.length === 1 ? "" : "s"}.
+                  Tap to view {(order.items ?? []).length} item
+                  {(order.items ?? []).length === 1 ? "" : "s"}.
                 </p>
-              ) : null}
-              {!showItems && items.length === 0 ? (
-                <p className="text-xs text-zinc-500 sm:hidden">No items found.</p>
               ) : null}
 
               <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2`}>
-                <p className="text-sm font-semibold text-zinc-900">Items</p>
-                {items.length === 0 ? (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-zinc-900">Items</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="print:hidden"
+                    onClick={() => handlePrint(order.id)}
+                  >
+                    Print order
+                  </Button>
+                </div>
+                {(order.items ?? []).length === 0 ? (
                   <p className="text-sm text-zinc-500">No items found.</p>
                 ) : (
                   <div className="space-y-2 text-sm text-zinc-700">
-                    {items.map((item) => (
+                    {(order.items ?? []).map((item) => (
                       <div
                         key={`${order.id}-${item.productId}`}
                         className="flex items-center justify-between border-b border-zinc-100 pb-2 last:border-b-0 last:pb-0"
                       >
                         <span>
-                          {item.qty} x {item.name}
+                          <span className="font-semibold">{item.qty}x</span> {item.name}
                         </span>
                         <span>{formatMoney(item.price)}</span>
                       </div>
@@ -685,63 +841,83 @@ export default function AdminOrdersClient() {
               </div>
 
               <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2 text-sm text-zinc-600`}>
-                <p>Notes: {order.statusNote || "-"}</p>
+                <p>Order notes: {order.statusNote ?? "-"}</p>
                 {order.cancellationReason ? (
-                  <p className="text-sm text-red-600">
-                    Cancel reason: {order.cancellationReason}
-                  </p>
+                  <p className="text-red-600">Cancel reason: {order.cancellationReason}</p>
                 ) : null}
+                {order.refundNote ? <p>Refund note: {order.refundNote}</p> : null}
               </div>
 
-              <div className="hidden flex-wrap gap-2 sm:flex">
-                {status === ORDER_STATUSES.NEW ? (
-                  <>
-                    <Button
-                      onClick={() =>
-                        handleStatusChange(order.id, ORDER_STATUSES.ACCEPTED)
-                      }
-                      disabled={updatingId === order.id}
-                    >
-                      Accept
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setCancelTarget(order);
-                        setCancelReason("");
-                        setCancelPreset("");
-                        setCancelError(null);
-                      }}
-                      disabled={updatingId === order.id}
-                    >
-                      Cancel
-                    </Button>
-                  </>
-                ) : null}
-                {status === ORDER_STATUSES.ACCEPTED ? (
+              {historyEntries.length > 0 ? (
+                <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2`}>
+                  <p className="text-sm font-semibold text-zinc-900">Audit trail</p>
+                  <div className="space-y-2 text-xs text-zinc-600">
+                    {historyEntries.map((entry, index) => (
+                      <div
+                        key={`${order.id}-${index}-${String(entry.at)}`}
+                        className="rounded-2xl bg-zinc-50 px-3 py-2"
+                      >
+                        <p className="font-medium text-zinc-800">
+                          {getHistoryLabel(entry)}
+                        </p>
+                        <p>
+                          {formatDateTime(entry.at)} - {entry.actorEmail ?? entry.actorUid}
+                        </p>
+                        {entry.reason ? <p>Reason: {entry.reason}</p> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="hidden flex-wrap gap-2 sm:flex print:hidden">
+                {primaryAction ? (
                   <Button
-                    onClick={() =>
-                      handleStatusChange(order.id, ORDER_STATUSES.READY)
-                    }
+                    onClick={() => void handlePrimaryAction(order)}
                     disabled={updatingId === order.id}
                   >
-                    Ready
+                    {isPendingConfirmation === pendingStatusKey &&
+                    primaryAction.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED
+                      ? "Confirm completed"
+                      : primaryAction.label}
                   </Button>
                 ) : null}
-                {status === ORDER_STATUSES.READY ? (
+
+                {canCancel ? (
                   <Button
-                    onClick={() =>
-                      handleStatusChange(order.id, ORDER_STATUSES.COMPLETED)
-                    }
+                    variant="outline"
+                    onClick={() => {
+                      setCancelTarget(order);
+                      setCancelReason("");
+                      setCancelPreset("");
+                      setCancelError(null);
+                    }}
                     disabled={updatingId === order.id}
                   >
-                    Complete
+                    Cancel order
                   </Button>
                 ) : null}
-                {!primaryAction && status === ORDER_STATUSES.CANCELLED ? (
-                  <span className="text-xs text-zinc-500">
-                    Cancelled order
-                  </span>
+
+                {refundActions.canMarkPending ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleRefundAction(order, "manual_pending")}
+                    disabled={updatingId === order.id}
+                  >
+                    Mark refund pending
+                  </Button>
+                ) : null}
+
+                {refundActions.canMarkRefunded ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleRefundAction(order, "refunded")}
+                    disabled={updatingId === order.id}
+                  >
+                    {isPendingConfirmation === pendingRefundKey
+                      ? "Confirm refunded"
+                      : "Mark refunded"}
+                  </Button>
                 ) : null}
               </div>
             </Card>
@@ -750,86 +926,112 @@ export default function AdminOrdersClient() {
       </div>
 
       {showMobileActionBar && activeMobileOrder ? (() => {
-        const status = activeMobileOrder.status ?? ORDER_STATUSES.NEW;
-        const primaryAction = getPrimaryAction(status);
-        const canCancel = status === ORDER_STATUSES.NEW;
-        if (!primaryAction && !canCancel) return null;
-        const confirmLabel =
-          pendingAction?.orderId === activeMobileOrder.id &&
-          pendingAction.action === primaryAction?.nextStatus
-            ? "Tap again to confirm"
-            : primaryAction?.label;
+        const primaryAction = getPrimaryAction(activeMobileOrder);
+        const canCancel = canCancelOrder(activeMobileOrder);
+        const refundActions = getRefundActions(activeMobileOrder);
+        const normalizedStatus = getNormalizedStatus(activeMobileOrder);
+        const pendingStatusKey = primaryAction
+          ? `status:${primaryAction.nextStatus}`
+          : "";
+        const pendingRefundKey = "refund:refunded";
+
+        if (!primaryAction && !canCancel && !refundActions.canMarkPending && !refundActions.canMarkRefunded) {
+          return null;
+        }
+
         return (
-          <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white p-3 sm:hidden">
+          <div className="fixed inset-x-0 bottom-0 z-40 border-t border-zinc-200 bg-white p-3 sm:hidden print:hidden">
             <div className="mb-2 flex items-center justify-between text-xs text-zinc-500">
               <span>Order #{orderNumberFromId(activeMobileOrder.id)}</span>
-              <span>{STATUS_LABELS[status] ?? status}</span>
+              <span>{ADMIN_STATUS_LABELS[normalizedStatus]}</span>
             </div>
-            <div className="flex gap-2">
+
+            <div className="grid grid-cols-1 gap-2">
               {primaryAction ? (
                 <Button
-                  className="flex-1"
-                  onClick={() =>
-                    handlePrimaryAction(activeMobileOrder.id, primaryAction.nextStatus)
-                  }
+                  onClick={() => void handlePrimaryAction(activeMobileOrder)}
                   disabled={updatingId === activeMobileOrder.id}
                 >
-                  {confirmLabel ?? primaryAction.label}
+                  {pendingAction?.orderId === activeMobileOrder.id &&
+                  pendingAction.action === pendingStatusKey &&
+                  primaryAction.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED
+                    ? "Tap again to confirm"
+                    : primaryAction.label}
                 </Button>
               ) : null}
-              {canCancel ? (
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => {
-                    setCancelTarget(activeMobileOrder);
-                    setCancelReason("");
-                    setCancelPreset("");
-                    setCancelError(null);
-                  }}
-                  disabled={updatingId === activeMobileOrder.id}
-                >
-                  Cancel
-                </Button>
-              ) : null}
+
+              <div className="grid grid-cols-2 gap-2">
+                {canCancel ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setCancelTarget(activeMobileOrder);
+                      setCancelReason("");
+                      setCancelPreset("");
+                      setCancelError(null);
+                    }}
+                    disabled={updatingId === activeMobileOrder.id}
+                  >
+                    Cancel order
+                  </Button>
+                ) : null}
+
+                {refundActions.canMarkPending ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleRefundAction(activeMobileOrder, "manual_pending")}
+                    disabled={updatingId === activeMobileOrder.id}
+                  >
+                    Refund pending
+                  </Button>
+                ) : null}
+
+                {refundActions.canMarkRefunded ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleRefundAction(activeMobileOrder, "refunded")}
+                    disabled={updatingId === activeMobileOrder.id}
+                  >
+                    {pendingAction?.orderId === activeMobileOrder.id &&
+                    pendingAction.action === pendingRefundKey
+                      ? "Confirm refund"
+                      : "Mark refunded"}
+                  </Button>
+                ) : null}
+              </div>
             </div>
-            {pendingAction?.orderId === activeMobileOrder.id ? (
-              <p className="mt-2 text-xs text-zinc-500">
-                Tap again to confirm status change.
-              </p>
-            ) : null}
           </div>
         );
       })() : null}
 
       {cancelTarget ? (
         <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-0 sm:items-center sm:p-4">
-          <div className="w-full max-h-[90vh] overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:max-w-lg sm:rounded-2xl">
+          <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:max-w-lg sm:rounded-2xl">
             <div className="space-y-2">
               <h3 className="text-lg font-semibold text-zinc-900">Cancel order</h3>
               <p className="text-sm text-zinc-600">
-                Provide a reason for cancelling order #{orderNumberFromId(cancelTarget.id)}.
+                Choose a reason for cancelling order #{orderNumberFromId(cancelTarget.id)}.
               </p>
             </div>
 
-            <div className="space-y-2">
+            <div className="mt-4 space-y-2">
               <p className="text-xs font-semibold text-zinc-900">Reason</p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {CANCEL_PRESETS.map((preset) => (
                   <button
-                    key={preset.value}
+                    key={preset}
                     type="button"
                     onClick={() => {
-                      setCancelPreset(preset.value);
-                      setCancelReason(preset.value === "Other" ? "" : preset.value);
+                      setCancelPreset(preset);
+                      setCancelReason(preset === "Other" ? "" : preset);
                     }}
-                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition ${
-                      cancelPreset === preset.value
+                    className={`rounded-full border px-3 py-2 text-left text-xs font-semibold transition ${
+                      cancelPreset === preset
                         ? "border-zinc-900 bg-zinc-900 text-white"
                         : "border-zinc-200 text-zinc-700 hover:border-zinc-300"
                     }`}
                   >
-                    {preset.label}
+                    {preset}
                   </button>
                 ))}
               </div>
@@ -840,13 +1042,11 @@ export default function AdminOrdersClient() {
                 className="mt-3 h-24 w-full rounded-2xl border border-zinc-200 p-3 text-sm text-zinc-700"
                 value={cancelReason}
                 onChange={(event) => setCancelReason(event.target.value)}
-                placeholder="Reason for cancellation"
+                placeholder="Cancellation reason"
               />
             ) : null}
 
-            {cancelError ? (
-              <p className="mt-2 text-xs text-red-600">{cancelError}</p>
-            ) : null}
+            {cancelError ? <p className="mt-2 text-xs text-red-600">{cancelError}</p> : null}
 
             <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button
@@ -861,7 +1061,7 @@ export default function AdminOrdersClient() {
                 Back
               </Button>
               <Button
-                onClick={handleCancelConfirm}
+                onClick={() => void handleCancelConfirm()}
                 disabled={updatingId === cancelTarget.id}
               >
                 Confirm cancel
