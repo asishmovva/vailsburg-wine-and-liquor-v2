@@ -6,7 +6,17 @@ export type EmailPayload = {
   html?: string;
 };
 
-export type EmailResult = {
+export type EmailAttemptResult = {
+  provider: string;
   ok: boolean;
   error?: string;
+  messageId?: string;
+};
+
+export type EmailResult = {
+  ok: boolean;
+  provider?: string;
+  messageId?: string;
+  error?: string;
+  attempts?: EmailAttemptResult[];
 };

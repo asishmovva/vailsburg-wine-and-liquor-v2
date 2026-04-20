@@ -15,6 +15,14 @@ import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useRole } from "@/hooks/useRole";
 import {
+  getMissedNotificationCandidates,
+  getNotificationEventLabel,
+  getNotificationSentAt,
+  getNotificationState,
+  getRelevantNotificationEvents,
+  type NotificationEventKey,
+} from "@/lib/notifications/events";
+import {
   ADMIN_ORDER_STATUSES,
   ADMIN_STATUS_LABELS,
   getAdminPrimaryActionLabel,
@@ -208,6 +216,7 @@ export default function AdminOrdersClient() {
     NotificationPermission | "unsupported"
   >("default");
   const [printOrderId, setPrintOrderId] = useState<string | null>(null);
+  const [resendingKey, setResendingKey] = useState<string | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const knownIdsRef = useRef<Set<string>>(new Set());
@@ -564,6 +573,45 @@ export default function AdminOrdersClient() {
     window.setTimeout(() => window.print(), 100);
   }, []);
 
+  const handleResendNotification = useCallback(
+    async (orderId: string, eventKey: NotificationEventKey) => {
+      if (!user) return;
+
+      const resendKey = `${orderId}:${eventKey}`;
+      setResendingKey(resendKey);
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch(`/api/admin/orders/${orderId}/notifications`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ eventKey }),
+        });
+
+        const payload = (await response.json()) as { error?: string; status?: string };
+        if (!response.ok) {
+          throw new Error(payload.error ?? "Unable to resend notification.");
+        }
+
+        toast.success(
+          payload.status === "skipped_duplicate"
+            ? "Notification already recorded for this event."
+            : "Notification sent."
+        );
+        await fetchOrders();
+      } catch (resendError) {
+        toast.error(
+          (resendError as Error).message ?? "Unable to resend notification."
+        );
+      } finally {
+        setResendingKey(null);
+      }
+    },
+    [fetchOrders, user]
+  );
+
   if (loading || roleLoading) {
     return <Card className="p-6 text-sm text-zinc-600">Loading admin view...</Card>;
   }
@@ -694,6 +742,8 @@ export default function AdminOrdersClient() {
           const historyEntries = [...(order.adminHistory ?? [])]
             .reverse()
             .slice(0, 5);
+          const notificationEvents = getRelevantNotificationEvents(order);
+          const missedNotificationCandidates = getMissedNotificationCandidates(order);
 
           return (
             <Card
@@ -869,6 +919,81 @@ export default function AdminOrdersClient() {
                   </div>
                 </div>
               ) : null}
+
+              <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2`}>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-zinc-900">
+                    Notifications
+                  </p>
+                  {missedNotificationCandidates.length > 0 ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                      Missed candidate
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2 text-xs text-zinc-600">
+                  {notificationEvents.map((eventKey) => {
+                    const notificationState = getNotificationState(
+                      order.notifications,
+                      eventKey
+                    );
+                    const sentAt = getNotificationSentAt(order.notifications, eventKey);
+                    const resendKey = `${order.id}:${eventKey}`;
+                    const isMissed = missedNotificationCandidates.includes(eventKey);
+
+                    const statusLabel = sentAt
+                      ? "Sent"
+                      : notificationState?.lastStatus === "failed"
+                        ? "Failed"
+                        : notificationState?.lastStatus === "skipped_duplicate"
+                          ? "Skipped duplicate"
+                          : isMissed
+                            ? "Missed candidate"
+                            : "Not sent";
+
+                    return (
+                      <div
+                        key={`${order.id}-${eventKey}`}
+                        className="rounded-2xl bg-zinc-50 px-3 py-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="font-medium text-zinc-800">
+                              {getNotificationEventLabel(
+                                eventKey,
+                                order.fulfillment ?? "pickup"
+                              )}
+                            </p>
+                            <p>
+                              {statusLabel}
+                              {sentAt ? ` - ${formatDateTime(sentAt)}` : ""}
+                            </p>
+                            {notificationState?.lastError ? (
+                              <p className="text-red-600">
+                                Last error: {notificationState.lastError}
+                              </p>
+                            ) : null}
+                          </div>
+
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              void handleResendNotification(order.id, eventKey)
+                            }
+                            disabled={resendingKey === resendKey}
+                          >
+                            {resendingKey === resendKey
+                              ? "Resending..."
+                              : "Resend"}
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
 
               <div className="hidden flex-wrap gap-2 sm:flex print:hidden">
                 {primaryAction ? (

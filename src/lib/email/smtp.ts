@@ -3,12 +3,16 @@ import "server-only";
 import nodemailer from "nodemailer";
 import type { EmailPayload, EmailResult } from "@/lib/email/types";
 
-function getSmtpConfig() {
-  const host = process.env.SMTP_HOST ?? "";
-  const portRaw = process.env.SMTP_PORT ?? "";
-  const secure = process.env.SMTP_SECURE === "true";
-  const user = process.env.SMTP_USER ?? "";
-  const pass = process.env.SMTP_PASS ?? "";
+function getEnvValue(prefix: string, key: string) {
+  return process.env[`${prefix}_${key}`];
+}
+
+function getSmtpConfig(prefix = "SMTP") {
+  const host = getEnvValue(prefix, "HOST") ?? "";
+  const portRaw = getEnvValue(prefix, "PORT") ?? "";
+  const secure = getEnvValue(prefix, "SECURE") === "true";
+  const user = getEnvValue(prefix, "USER") ?? "";
+  const pass = getEnvValue(prefix, "PASS") ?? "";
 
   const port = Number.parseInt(portRaw, 10);
 
@@ -19,15 +23,28 @@ function getSmtpConfig() {
   return { host, port, secure, auth: { user, pass } };
 }
 
-export async function sendEmail(payload: EmailPayload): Promise<EmailResult> {
+export async function sendEmail(
+  payload: EmailPayload,
+  options?: {
+    prefix?: string;
+    providerName?: string;
+  }
+): Promise<EmailResult> {
+  const prefix = options?.prefix ?? "SMTP";
+  const providerName = options?.providerName ?? "smtp";
+
   try {
-    const config = getSmtpConfig();
+    const config = getSmtpConfig(prefix);
     if (!config) {
-      return { ok: false, error: "SMTP not configured." };
+      return {
+        ok: false,
+        provider: providerName,
+        error: `${providerName} not configured.`,
+      };
     }
 
     const transporter = nodemailer.createTransport(config);
-    await transporter.sendMail({
+    const info = await transporter.sendMail({
       to: payload.to,
       from: payload.from,
       subject: payload.subject,
@@ -35,8 +52,16 @@ export async function sendEmail(payload: EmailPayload): Promise<EmailResult> {
       html: payload.html,
     });
 
-    return { ok: true };
+    return {
+      ok: true,
+      provider: providerName,
+      messageId: info.messageId,
+    };
   } catch (error) {
-    return { ok: false, error: (error as Error).message };
+    return {
+      ok: false,
+      provider: providerName,
+      error: (error as Error).message,
+    };
   }
 }

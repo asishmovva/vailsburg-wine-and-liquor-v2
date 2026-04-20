@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
-import { sendEmail } from "@/lib/email";
-import { maybeSendCustomerOrderEmail } from "@/lib/email/orderNotifications";
-import { buildNewOrderEmail, type OrderEmailData } from "@/lib/email/orders";
+import type { OrderNotifications } from "@/lib/orders/types";
+import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import { getStripe } from "@/lib/stripe";
 import { ORDER_STATUSES } from "@/lib/orders/status";
 
@@ -31,13 +30,7 @@ type OrderData = {
   phone?: string | null;
   customer?: { name?: string | null; phone?: string | null; email?: string | null };
   alerts?: { emailSentAt?: unknown; emailLastError?: string | null };
-  notifications?: {
-    orderReceivedSentAt?: unknown;
-    readySentAt?: unknown;
-    outForDeliverySentAt?: unknown;
-    cancelledSentAt?: unknown;
-    emailLastError?: string | null;
-  };
+  notifications?: OrderNotifications | null;
   createdAt?: unknown;
   updatedAt?: unknown;
   paidAt?: unknown;
@@ -54,87 +47,6 @@ function buildPointer(orderId: string, order: OrderData) {
     updatedAt: FieldValue.serverTimestamp(),
     items: order.items ?? [],
   };
-}
-
-async function maybeSendNewOrderEmail({
-  orderId,
-  orderData,
-  orderRef,
-}: {
-  orderId: string;
-  orderData: OrderData;
-  orderRef: FirebaseFirestore.DocumentReference;
-}) {
-  if (process.env.ORDERS_EMAIL_ENABLED !== "true") return;
-  if (orderData.alerts?.emailSentAt) {
-    console.log("[orders_email_skipped_duplicate]", { orderId });
-    return;
-  }
-
-  const to = process.env.STORE_ORDERS_EMAIL_TO ?? "";
-  const from = process.env.STORE_ORDERS_EMAIL_FROM ?? "";
-  if (!to || !from) {
-    console.log("[orders_email_error]", { orderId, reason: "missing_email_env" });
-    return;
-  }
-
-  const emailPayload = buildNewOrderEmail({
-    id: orderId,
-    fulfillment: orderData.fulfillment,
-    delivery: orderData.delivery ?? null,
-    subtotal: orderData.subtotal,
-    tax: orderData.tax,
-    tip: orderData.tip,
-    total: orderData.total,
-    createdAt: orderData.createdAt,
-    email: orderData.email,
-    phone: orderData.phone,
-    customer: orderData.customer,
-    items: (orderData.items ?? []).map((item) => ({
-      name: item.name ?? "Item",
-      qty: item.qty,
-      price: item.price,
-    })) as OrderEmailData["items"],
-  });
-
-  const result = await sendEmail({
-    to,
-    from,
-    subject: emailPayload.subject,
-    text: emailPayload.text,
-    html: emailPayload.html,
-  });
-
-  if (result.ok) {
-    try {
-      await orderRef.update({
-        "alerts.emailSentAt": FieldValue.serverTimestamp(),
-        "alerts.emailLastError": FieldValue.delete(),
-      });
-      console.log("[orders_email_sent]", { orderId });
-    } catch (error) {
-      console.log("[orders_email_error]", {
-        orderId,
-        reason: (error as Error).message,
-      });
-    }
-    return;
-  }
-
-  try {
-    await orderRef.update({
-      "alerts.emailLastError": result.error ?? "smtp_failed",
-    });
-  } catch (error) {
-    console.log("[orders_email_error]", {
-      orderId,
-      reason: (error as Error).message,
-    });
-  }
-  console.log("[orders_email_error]", {
-    orderId,
-    reason: result.error ?? "smtp_failed",
-  });
 }
 
 export async function POST(request: Request) {
@@ -334,13 +246,20 @@ export async function POST(request: Request) {
       },
     };
 
-    await maybeSendNewOrderEmail({ orderId, orderData: refreshedOrderData, orderRef });
-    await maybeSendCustomerOrderEmail({
-      orderId,
-      order: refreshedOrderData,
-      orderRef,
-      milestone: "orderReceived",
-    });
+    await Promise.allSettled([
+      sendOrderNotification({
+        orderId,
+        order: refreshedOrderData,
+        orderRef,
+        eventKey: "ADMIN_NEW_ORDER_ALERT",
+      }),
+      sendOrderNotification({
+        orderId,
+        order: refreshedOrderData,
+        orderRef,
+        eventKey: "ORDER_RECEIVED",
+      }),
+    ]);
 
     console.log("[stripe:webhook] order_created", {
       orderId,
@@ -458,13 +377,20 @@ export async function POST(request: Request) {
       },
     };
 
-    await maybeSendNewOrderEmail({ orderId, orderData: refreshedOrderData, orderRef });
-    await maybeSendCustomerOrderEmail({
-      orderId,
-      order: refreshedOrderData,
-      orderRef,
-      milestone: "orderReceived",
-    });
+    await Promise.allSettled([
+      sendOrderNotification({
+        orderId,
+        order: refreshedOrderData,
+        orderRef,
+        eventKey: "ADMIN_NEW_ORDER_ALERT",
+      }),
+      sendOrderNotification({
+        orderId,
+        order: refreshedOrderData,
+        orderRef,
+        eventKey: "ORDER_RECEIVED",
+      }),
+    ]);
 
     console.log("[stripe:webhook] order_created", {
       orderId,
