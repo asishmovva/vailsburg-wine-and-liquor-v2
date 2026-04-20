@@ -14,6 +14,13 @@ export default function AdminPage() {
       <Card className="space-y-3 text-sm text-zinc-600">
         <p>You have admin access.</p>
         <p className="text-xs text-zinc-500">
+          Go to{" "}
+          <Link href="/admin/orders" className="font-medium text-zinc-700 underline underline-offset-2">
+            /admin/orders
+          </Link>{" "}
+          to manage the live order queue.
+        </p>
+        <p className="text-xs text-zinc-500">
           Go to <span className="font-medium text-zinc-700">/admin/sync</span> to run Sypram syncs.
         </p>
         <p className="text-xs text-zinc-500">

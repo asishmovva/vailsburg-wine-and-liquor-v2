@@ -43,6 +43,22 @@ export type OrderNotifications = {
   emailLastError?: string | null;
 };
 
+export type OrderRefundStatus =
+  | "not_requested"
+  | "requested"
+  | "manual_pending"
+  | "refunded";
+
+export type OrderAdminHistoryEntry = {
+  at?: unknown;
+  actorUid: string;
+  actorEmail?: string | null;
+  action: "status_change" | "cancel" | "refund_marked" | "note_added";
+  from?: string | null;
+  to?: string | null;
+  reason?: string | null;
+};
+
 export type OrderRecord = {
   id: string;
   orderId?: string;
@@ -65,6 +81,9 @@ export type OrderRecord = {
   phone?: string | null;
   customer?: OrderCustomer | null;
   cancellationReason?: string | null;
+  cancelReason?: string | null;
+  cancelledAt?: unknown;
+  cancelledBy?: string | null;
   statusNote?: string | null;
   notifications?: OrderNotifications | null;
   fulfillmentStatus?: string | null;
@@ -72,6 +91,11 @@ export type OrderRecord = {
     paymentIntentId?: string | null;
     checkoutSessionId?: string | null;
   } | null;
+  refundStatus?: OrderRefundStatus | null;
+  refundNote?: string | null;
+  refundedAt?: unknown;
+  adminHistory?: OrderAdminHistoryEntry[] | null;
+  paid?: boolean;
   pos?: {
     pushStatus?: string | null;
   } | null;
