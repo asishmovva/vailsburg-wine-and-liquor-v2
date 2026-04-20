@@ -19,15 +19,21 @@ import { orderNumberFromId } from "@/utils/order";
 
 function getFulfillmentMessage(order: OrderRecord) {
   if (order.fulfillment === "delivery") {
+    const lines = [
+      order.delivery?.address ?? "Delivery address unavailable.",
+      order.delivery?.miles
+        ? `${order.delivery.miles.toFixed(1)} miles from store`
+        : "Same-day delivery requested.",
+      "We'll notify you when your order is on the way.",
+    ];
+
+    if (order.deliveryInstructions) {
+      lines.push(`Delivery instructions: ${order.deliveryInstructions}`);
+    }
+
     return {
       title: "Delivery details",
-      lines: [
-        order.delivery?.address ?? "Delivery address unavailable.",
-        order.delivery?.miles
-          ? `${order.delivery.miles.toFixed(1)} miles from store`
-          : "Same-day delivery requested.",
-        "We'll notify you when your order is on the way.",
-      ],
+      lines,
     };
   }
 

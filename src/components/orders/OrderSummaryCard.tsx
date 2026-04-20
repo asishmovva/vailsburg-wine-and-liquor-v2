@@ -76,6 +76,11 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
                 {(order.delivery.miles ?? 0).toFixed(1)} miles from store
               </p>
             ) : null}
+            {order.deliveryInstructions ? (
+              <p className="text-xs text-zinc-500">
+                Delivery instructions: {order.deliveryInstructions}
+              </p>
+            ) : null}
           </div>
         ) : (
           <div className="space-y-1 text-sm text-zinc-600">
@@ -158,6 +163,10 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
             <span>{order.paymentMethodLabel}</span>
           </div>
         ) : null}
+        <div className="flex items-center justify-between">
+          <span>Age confirmation</span>
+          <span>{order.ageVerified ? "21+ confirmed" : "Pending"}</span>
+        </div>
         <div className="flex items-center justify-between">
           <span>Tax</span>
           <span>{formatMoney(order.tax)}</span>

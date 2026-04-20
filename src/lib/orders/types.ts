@@ -27,6 +27,10 @@ export type DeliveryInfo = {
   address: string;
   miles?: number;
   eligible?: boolean;
+  lat?: number;
+  lng?: number;
+  placeId?: string | null;
+  instructions?: string | null;
 };
 
 export type OrderCustomer = {
@@ -94,12 +98,15 @@ export type OrderRecord = {
   paymentMethodLabel?: string | null;
   fulfillment: OrderFulfillment;
   delivery?: DeliveryInfo | null;
+  deliveryInstructions?: string | null;
   items: OrderItem[];
   subtotal: number;
   deliveryFee: number;
   tip: number;
   tax: number;
   total: number;
+  ageVerified?: boolean;
+  checkoutAttemptKey?: string | null;
   createdAt?: unknown;
   updatedAt?: unknown;
   paidAt?: unknown;

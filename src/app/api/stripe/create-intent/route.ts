@@ -17,23 +17,37 @@ const USE_STRIPE_TAX = process.env.USE_STRIPE_TAX === "true";
 type CartInputItem = {
   productId: string;
   qty: number;
+  expectedPrice?: number;
 };
 
 type AddressInput = {
-  street: string;
+  street?: string;
   apt?: string;
-  city: string;
-  state: string;
-  zip: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+};
+
+type SelectedAddressInput = {
+  id?: string;
+  label?: string;
+  street?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  coordinates?: { lat: number; lng: number } | null;
 };
 
 type CreateIntentPayload = {
   items: CartInputItem[];
   fulfillment: "delivery" | "pickup";
   address?: AddressInput;
+  selectedAddress?: SelectedAddressInput | null;
   coords?: { lat: number; lng: number } | null;
-  distanceMiles?: number;
   tipAmount?: number;
+  ageVerified?: boolean;
+  deliveryInstructions?: string;
+  checkoutAttemptKey?: string;
   idToken?: string | null;
 };
 
@@ -46,9 +60,44 @@ type OrderItem = {
   category: string;
 };
 
+type CanonicalAddress = {
+  street: string;
+  city: string;
+  state: string;
+  zip: string;
+  formattedAddress: string;
+  placeId: string | null;
+  coords: { lat: number; lng: number };
+};
+
+type CheckoutAttemptOrder = {
+  id?: string;
+  status?: string | null;
+  userId?: string | null;
+  checkoutAttemptKey?: string | null;
+  stripe?: {
+    paymentIntentId?: string | null;
+    checkoutSessionId?: string | null;
+  } | null;
+};
+
 function parseNumber(value: unknown) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeText(value?: string | null) {
+  return value?.toString().trim() ?? "";
+}
+
+function logCheckoutEvent(
+  level: "info" | "warn" | "error",
+  event: string,
+  meta: Record<string, unknown>
+) {
+  const logger =
+    level === "error" ? console.error : level === "warn" ? console.warn : console.log;
+  logger(`[checkout:${event}]`, meta);
 }
 
 function getMapboxToken() {
@@ -88,9 +137,10 @@ async function getDrivingDistanceMiles(coords: { lat: number; lng: number }) {
   return meters / 1609.344;
 }
 
-async function reverseGeocode(coords: { lat: number; lng: number }) {
+async function reverseGeocodeAddress(coords: { lat: number; lng: number }) {
   const token = getMapboxToken();
   if (!token) throw new Error("Mapbox token missing.");
+
   const url = new URL(
     `https://api.mapbox.com/geocoding/v5/mapbox.places/${coords.lng},${coords.lat}.json`
   );
@@ -103,30 +153,48 @@ async function reverseGeocode(coords: { lat: number; lng: number }) {
 
   const data = (await response.json()) as {
     features?: Array<{
-      text: string;
+      id?: string;
+      place_name?: string;
+      text?: string;
       address?: string;
-      center: [number, number];
+      center?: [number, number];
       context?: Array<{ id?: string; text?: string }>;
     }>;
   };
 
   const feature = data.features?.[0];
-  if (!feature) throw new Error("Store address unavailable.");
+  if (!feature?.center) {
+    throw new Error("Delivery address unavailable.");
+  }
 
   const context = feature.context ?? [];
   const city = context.find((item) => item.id?.startsWith("place"))?.text ?? "";
   const state = context.find((item) => item.id?.startsWith("region"))?.text ?? "";
   const zip = context.find((item) => item.id?.startsWith("postcode"))?.text ?? "";
+  const street = feature.address
+    ? `${feature.address} ${feature.text ?? ""}`.trim()
+    : normalizeText(feature.text);
+  const formattedAddress = normalizeText(feature.place_name) || street;
+
+  if (!street || !city || !state || !zip) {
+    throw new Error("Delivery address is incomplete.");
+  }
 
   return {
-    street: feature.address ? `${feature.address} ${feature.text}` : feature.text,
+    street,
     city,
     state,
     zip,
-  };
+    formattedAddress,
+    placeId: feature.id ?? null,
+    coords: {
+      lng: feature.center[0],
+      lat: feature.center[1],
+    },
+  } satisfies CanonicalAddress;
 }
 
-function formatAddress(address: AddressInput) {
+function formatAddress(address: { street: string; apt?: string; city: string; state: string; zip: string }) {
   const parts = [
     address.street,
     address.apt ? `Apt ${address.apt}` : "",
@@ -146,7 +214,7 @@ async function calculateStripeTax({
 }: {
   items: OrderItem[];
   deliveryFee: number;
-  address: AddressInput;
+  address: { street: string; city: string; state: string; zip: string };
 }) {
   const stripe = getStripe();
   const lineItems = items.map((item) => ({
@@ -180,17 +248,45 @@ async function calculateStripeTax({
   return Math.max(taxAmount, 0);
 }
 
+function validationResponse(
+  status: number,
+  error: string,
+  code: string,
+  meta: Record<string, unknown>
+) {
+  logCheckoutEvent("warn", code, meta);
+  return NextResponse.json({ error, code }, { status });
+}
+
+async function getExistingCheckoutAttempt(userId: string, checkoutAttemptKey: string) {
+  const snapshot = await adminDb()
+    .collection("orders")
+    .where("userId", "==", userId)
+    .where("checkoutAttemptKey", "==", checkoutAttemptKey)
+    .limit(1)
+    .get();
+
+  if (snapshot.empty) return null;
+
+  return {
+    ref: snapshot.docs[0].ref,
+    data: snapshot.docs[0].data() as CheckoutAttemptOrder,
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as CreateIntentPayload;
     const items = payload.items ?? [];
     if (!Array.isArray(items) || items.length === 0) {
-      return NextResponse.json({ error: "Cart is empty." }, { status: 400 });
+      return validationResponse(400, "Your cart is empty.", "empty_cart", {});
     }
 
     const fulfillment = payload.fulfillment;
     if (fulfillment !== "delivery" && fulfillment !== "pickup") {
-      return NextResponse.json({ error: "Invalid fulfillment." }, { status: 400 });
+      return validationResponse(400, "Invalid fulfillment option.", "invalid_fulfillment", {
+        fulfillment,
+      });
     }
 
     if (!payload.idToken) {
@@ -207,22 +303,103 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
+    const checkoutAttemptKey = normalizeText(payload.checkoutAttemptKey);
+    if (!checkoutAttemptKey) {
+      return validationResponse(
+        400,
+        "Checkout session expired. Please try again.",
+        "missing_checkout_attempt_key",
+        { userId }
+      );
+    }
+
+    const ageVerified = payload.ageVerified === true;
+    if (!ageVerified) {
+      return validationResponse(
+        400,
+        "You must confirm you are 21+ and will present a valid ID.",
+        "age_verification_required",
+        { userId, fulfillment }
+      );
+    }
+
+    const existingAttempt = await getExistingCheckoutAttempt(userId, checkoutAttemptKey);
+    if (existingAttempt?.data?.stripe?.paymentIntentId) {
+      const existingStatus = normalizeText(existingAttempt.data.status);
+      if (existingStatus === ORDER_STATUSES.PENDING_PAYMENT) {
+        try {
+          const stripe = getStripe();
+          const existingIntent = await stripe.paymentIntents.retrieve(
+            existingAttempt.data.stripe.paymentIntentId
+          );
+
+          if (
+            existingIntent.status !== "canceled" &&
+            existingIntent.status !== "succeeded"
+          ) {
+            logCheckoutEvent("info", "reuse_checkout_attempt", {
+              userId,
+              checkoutAttemptKey,
+              orderId: existingAttempt.data.id ?? existingAttempt.ref.id,
+              paymentIntentId: existingIntent.id,
+            });
+
+            return NextResponse.json({
+              clientSecret: existingIntent.client_secret,
+              orderId: existingAttempt.data.id ?? existingAttempt.ref.id,
+            });
+          }
+        } catch (error) {
+          logCheckoutEvent("warn", "reuse_checkout_attempt_failed", {
+            userId,
+            checkoutAttemptKey,
+            error: (error as Error).message,
+          });
+        }
+      } else {
+        return validationResponse(
+          409,
+          "This checkout attempt has already been submitted.",
+          "duplicate_checkout_attempt",
+          {
+            userId,
+            checkoutAttemptKey,
+            orderId: existingAttempt.data.id ?? existingAttempt.ref.id,
+            status: existingStatus,
+          }
+        );
+      }
+    }
+
     const db = adminDb();
     const productsRef = db.collection("products");
     const orderItems: OrderItem[] = [];
+    const unavailableItems: string[] = [];
     const blockedItems: string[] = [];
     const outOfStockItems: string[] = [];
+    const priceChangedItems: string[] = [];
     let subtotalCents = 0;
     let taxableSubtotalCents = 0;
 
     for (const item of items) {
-      const productSnap = await productsRef.doc(item.productId).get();
-      if (!productSnap.exists) {
-        return NextResponse.json(
-          { error: "Some products are unavailable." },
-          { status: 400 }
-        );
+      const productId = normalizeText(item.productId);
+      const qty = Math.floor(parseNumber(item.qty));
+      const expectedPrice = parseNumber(item.expectedPrice);
+
+      if (!productId || qty <= 0) {
+        return validationResponse(400, "Some cart items are invalid.", "invalid_cart_item", {
+          userId,
+          productId,
+          qty,
+        });
       }
+
+      const productSnap = await productsRef.doc(productId).get();
+      if (!productSnap.exists) {
+        unavailableItems.push(productId);
+        continue;
+      }
+
       const data = productSnap.data() as {
         name?: string;
         price?: number;
@@ -233,26 +410,39 @@ export async function POST(request: Request) {
         taxable?: boolean;
         isSellableOnline?: boolean;
       };
+
+      const name = data.name ?? productId;
       if (data.isSellableOnline !== true) {
-        blockedItems.push(data.name ?? item.productId);
+        blockedItems.push(name);
         continue;
       }
-      const stock = parseNumber(data.stock);
-      const qty = parseNumber(item.qty);
-      if (stock <= 0 || qty <= 0 || qty > stock) {
-        outOfStockItems.push(data.name ?? item.productId);
+
+      const stock = Math.floor(parseNumber(data.stock));
+      if (stock <= 0 || qty > stock) {
+        outOfStockItems.push(name);
         continue;
       }
+
       const price = parseNumber(data.price);
+      if (
+        Number.isFinite(expectedPrice) &&
+        expectedPrice > 0 &&
+        Math.round(expectedPrice * 100) !== Math.round(price * 100)
+      ) {
+        priceChangedItems.push(name);
+        continue;
+      }
+
       const priceCents = Math.round(price * 100);
       const isTaxable = data.taxable === false ? false : true;
       subtotalCents += priceCents * qty;
       if (isTaxable) {
         taxableSubtotalCents += priceCents * qty;
       }
+
       orderItems.push({
-        productId: item.productId,
-        name: data.name ?? "Item",
+        productId,
+        name,
         price,
         qty,
         image: resolveProductImage(data) || null,
@@ -260,84 +450,141 @@ export async function POST(request: Request) {
       });
     }
 
+    if (unavailableItems.length > 0) {
+      return validationResponse(
+        400,
+        `Some products are no longer available: ${unavailableItems.join(", ")}`,
+        "items_unavailable",
+        { userId, unavailableItems }
+      );
+    }
+
     if (blockedItems.length > 0) {
-      return NextResponse.json(
-        {
-          error: `Blocked items: ${blockedItems.join(", ")}`,
-          blockedItems,
-        },
-        { status: 400 }
+      return validationResponse(
+        400,
+        `These items are no longer available online: ${blockedItems.join(", ")}`,
+        "items_blocked",
+        { userId, blockedItems }
       );
     }
 
     if (outOfStockItems.length > 0) {
-      return NextResponse.json(
-        {
-          error: `Out of stock: ${outOfStockItems.join(", ")}`,
-          outOfStockItems,
-        },
-        { status: 400 }
+      return validationResponse(
+        400,
+        `These items are out of stock: ${outOfStockItems.join(", ")}`,
+        "items_out_of_stock",
+        { userId, outOfStockItems }
+      );
+    }
+
+    if (priceChangedItems.length > 0) {
+      return validationResponse(
+        409,
+        `Prices changed for: ${priceChangedItems.join(", ")}. Please review your cart and try again.`,
+        "price_mismatch",
+        { userId, priceChangedItems }
       );
     }
 
     if (orderItems.length === 0) {
-      return NextResponse.json(
-        { error: "Cart is empty." },
-        { status: 400 }
-      );
+      return validationResponse(400, "Your cart is empty.", "empty_validated_cart", {
+        userId,
+      });
     }
 
     const subtotal = subtotalCents / 100;
     const taxableSubtotal = taxableSubtotalCents / 100;
+    const deliveryInstructions = normalizeText(payload.deliveryInstructions);
 
-    let distanceMiles: number | null = null;
     let deliveryFee = 0;
-    let deliveryAddress: AddressInput | null = null;
+    let deliveryAddress: CanonicalAddress | null = null;
     let deliveryInfo:
-      | { address: string; miles: number; eligible: boolean }
+      | {
+          address: string;
+          miles: number;
+          eligible: true;
+          lat: number;
+          lng: number;
+          placeId: string | null;
+          instructions?: string | null;
+        }
       | null = null;
 
     if (fulfillment === "delivery") {
-      const coords = payload.coords;
-      if (!coords) {
-        return NextResponse.json(
-          { error: "Delivery address coordinates missing." },
-          { status: 400 }
-        );
-      }
-      const address = payload.address;
-      if (!address?.street || !address.city || !address.zip) {
-        return NextResponse.json(
-          { error: "Delivery address incomplete." },
-          { status: 400 }
+      const selectedAddress = payload.selectedAddress;
+      const rawCoords = selectedAddress?.coordinates ?? payload.coords;
+      if (!rawCoords || !Number.isFinite(rawCoords.lat) || !Number.isFinite(rawCoords.lng)) {
+        return validationResponse(
+          400,
+          "Select a valid delivery address from the suggestions before continuing.",
+          "missing_delivery_coordinates",
+          { userId }
         );
       }
 
-      distanceMiles = await getDrivingDistanceMiles(coords);
+      try {
+        deliveryAddress = await reverseGeocodeAddress(rawCoords);
+      } catch (error) {
+        return validationResponse(
+          400,
+          "We could not validate that delivery address. Please choose a valid address from the suggestions.",
+          "delivery_address_invalid",
+          { userId, error: (error as Error).message }
+        );
+      }
+
+      let distanceMiles: number;
+      try {
+        distanceMiles = await getDrivingDistanceMiles(deliveryAddress.coords);
+      } catch (error) {
+        logCheckoutEvent("error", "delivery_distance_failed", {
+          userId,
+          error: (error as Error).message,
+        });
+        return NextResponse.json(
+          { error: "Unable to validate delivery distance right now. Please try again." },
+          { status: 502 }
+        );
+      }
+
       if (distanceMiles > DELIVERY_RADIUS_MILES) {
-        return NextResponse.json(
-          { error: "Outside delivery radius." },
-          { status: 400 }
+        return validationResponse(
+          400,
+          "Delivery address is outside our delivery area",
+          "delivery_radius_exceeded",
+          {
+            userId,
+            miles: Number(distanceMiles.toFixed(2)),
+          }
         );
       }
+
       if (subtotal < MIN_DELIVERY_ORDER) {
-        return NextResponse.json(
-          { error: "Minimum delivery order not met." },
-          { status: 400 }
+        return validationResponse(
+          400,
+          `Delivery orders must be at least $${MIN_DELIVERY_ORDER.toFixed(2)} before tax and tip.`,
+          "minimum_delivery_order",
+          { userId, subtotal }
         );
       }
+
       deliveryFee = DELIVERY_FEE;
-      deliveryAddress = {
-        street: address.street,
-        apt: address.apt,
-        city: address.city,
-        state: address.state,
-        zip: address.zip,
-      };
+      const apt = normalizeText(payload.address?.apt);
+      const formattedAddress = formatAddress({
+        street: deliveryAddress.street,
+        apt,
+        city: deliveryAddress.city,
+        state: deliveryAddress.state,
+        zip: deliveryAddress.zip,
+      });
       deliveryInfo = {
-        address: formatAddress(deliveryAddress),
+        address: formattedAddress,
         miles: Number(distanceMiles.toFixed(2)),
         eligible: true,
+        lat: deliveryAddress.coords.lat,
+        lng: deliveryAddress.coords.lng,
+        placeId: selectedAddress?.id ?? deliveryAddress.placeId ?? null,
+        instructions: deliveryInstructions || null,
       };
     }
 
@@ -348,22 +595,34 @@ export async function POST(request: Request) {
     let taxRate = TAX_RATE;
     let taxStrategy = "manual";
 
-    if (USE_STRIPE_TAX) {
-      let taxAddress = deliveryAddress;
-      if (!taxAddress) {
-        const storeCoords = getStoreCoords();
-        taxAddress = await reverseGeocode(storeCoords);
+    try {
+      if (USE_STRIPE_TAX) {
+        let taxAddress = deliveryAddress;
+        if (!taxAddress) {
+          const storeCoords = getStoreCoords();
+          taxAddress = await reverseGeocodeAddress(storeCoords);
+        }
+        taxCents = await calculateStripeTax({
+          items: orderItems,
+          deliveryFee,
+          address: taxAddress,
+        });
+        taxStrategy = "stripe";
+        taxRate =
+          taxableSubtotalCents > 0 ? taxCents / taxableSubtotalCents : TAX_RATE;
+      } else {
+        taxCents = Math.round(taxableSubtotalCents * TAX_RATE);
       }
-      taxCents = await calculateStripeTax({
-        items: orderItems,
-        deliveryFee,
-        address: taxAddress,
+    } catch (error) {
+      logCheckoutEvent("error", "tax_calculation_failed", {
+        userId,
+        fulfillment,
+        error: (error as Error).message,
       });
-      taxStrategy = "stripe";
-      taxRate =
-        taxableSubtotalCents > 0 ? taxCents / taxableSubtotalCents : TAX_RATE;
-    } else {
-      taxCents = Math.round(taxableSubtotalCents * TAX_RATE);
+      return NextResponse.json(
+        { error: "Unable to calculate tax right now. Please try again." },
+        { status: 502 }
+      );
     }
 
     const totalCents =
@@ -375,19 +634,38 @@ export async function POST(request: Request) {
     const stripe = getStripe();
     const orderRef = db.collection("orders").doc();
     const orderId = orderRef.id;
-
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: totalCents,
-      currency: "usd",
-      automatic_payment_methods: { enabled: true },
-      receipt_email: email ?? undefined,
-      metadata: {
-        orderId,
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create(
+        {
+          amount: totalCents,
+          currency: "usd",
+          automatic_payment_methods: { enabled: true },
+          receipt_email: email ?? undefined,
+          metadata: {
+            orderId,
+            userId,
+            uid: userId,
+            fulfillment,
+            checkoutAttemptKey,
+            ageVerified: "true",
+          },
+        },
+        {
+          idempotencyKey: checkoutAttemptKey,
+        }
+      );
+    } catch (error) {
+      logCheckoutEvent("error", "payment_intent_failed", {
         userId,
-        uid: userId,
-        fulfillment,
-      },
-    });
+        checkoutAttemptKey,
+        error: (error as Error).message,
+      });
+      return NextResponse.json(
+        { error: "Unable to start payment right now. Please try again." },
+        { status: 502 }
+      );
+    }
 
     await orderRef.set({
       id: orderId,
@@ -395,12 +673,15 @@ export async function POST(request: Request) {
       userId,
       email,
       guestId: null,
+      checkoutAttemptKey,
+      ageVerified: true,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
       status: ORDER_STATUSES.PENDING_PAYMENT,
       paid: false,
       fulfillment,
       delivery: deliveryInfo ?? null,
+      deliveryInstructions: fulfillment === "delivery" ? deliveryInstructions || null : null,
       deliveryFee,
       tip: tipAmount,
       subtotal,
@@ -428,6 +709,9 @@ export async function POST(request: Request) {
           total: totalCents / 100,
           fulfillment,
           items: orderItems,
+          ageVerified: true,
+          deliveryInstructions:
+            fulfillment === "delivery" ? deliveryInstructions || null : null,
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
@@ -446,11 +730,28 @@ export async function POST(request: Request) {
         taxStrategy,
         total: totalCents / 100,
         fulfillment,
-        address: deliveryAddress ?? undefined,
+        ageVerified: true,
+        deliveryInstructions:
+          fulfillment === "delivery" ? deliveryInstructions || undefined : undefined,
+        address:
+          fulfillment === "delivery" && deliveryAddress
+            ? {
+                street: deliveryAddress.street,
+                apt: normalizeText(payload.address?.apt) || undefined,
+                city: deliveryAddress.city,
+                state: deliveryAddress.state,
+                zip: deliveryAddress.zip,
+                formatted: deliveryInfo?.address,
+                placeId: deliveryInfo?.placeId ?? undefined,
+              }
+            : undefined,
         items: orderItems,
       },
     });
   } catch (error) {
+    logCheckoutEvent("error", "create_intent_unhandled", {
+      error: (error as Error).message,
+    });
     return NextResponse.json(
       { error: (error as Error).message || "Unable to create payment." },
       { status: 500 }
