@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { useCart } from "@/hooks/useCart";
 import { useAuth } from "@/hooks/useAuth";
+import { authedFetch } from "@/lib/client/authedFetch";
 
 const stripePromise = loadStripe(
   process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? ""
@@ -38,6 +39,20 @@ type OrderSummary = {
     category?: string;
   }>;
 };
+
+async function logPaymentFailure(orderId: string, message: string) {
+  if (!orderId) return;
+
+  try {
+    await authedFetch(`/api/orders/${encodeURIComponent(orderId)}/payment-failure`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    });
+  } catch {
+    // Keep payment UX resilient even if failure logging is unavailable.
+  }
+}
 
 function formatMoney(value: number) {
   return `$${value.toFixed(2)}`;
@@ -100,7 +115,11 @@ function PaymentForm({
     });
 
     if (result.error) {
-      setError(result.error.message ?? "Payment failed. Try again.");
+      const message =
+        result.error.message ??
+        "Payment failed. Your cart is still saved, so please review your details and try again.";
+      await logPaymentFailure(orderId, message);
+      setError(message);
       setProcessing(false);
       return;
     }
@@ -120,7 +139,10 @@ function PaymentForm({
       return;
     }
 
-    setError("Payment requires additional steps. Please try again.");
+    const message =
+      "Payment could not be completed. Your cart is still saved, so please try again.";
+    await logPaymentFailure(orderId, message);
+    setError(message);
     setProcessing(false);
   };
 
@@ -139,9 +161,13 @@ function PaymentForm({
           }}
         />
       </div>
-      <p className="text-xs text-zinc-500">
-        Wallet options appear if supported by your device/browser.
-      </p>
+      <div className="space-y-1 text-xs text-zinc-500">
+        <p>Wallet options appear if supported by your device/browser.</p>
+        <p>
+          If payment fails, your cart stays intact and you can retry without
+          starting over.
+        </p>
+      </div>
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       <Button type="submit" disabled={!stripe || processing} className="w-full">
         {processing ? "Processing..." : "Confirm payment"}

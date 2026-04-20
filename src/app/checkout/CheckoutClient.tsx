@@ -63,9 +63,19 @@ type ValidationState = {
 type CheckoutPrefs = {
   fulfillmentType: Fulfillment;
   address: Address;
+  selectedAddress?: AddressSuggestion | null;
   coords?: Coordinates;
   distanceMiles?: number;
+  deliveryInstructions?: string;
+  ageConfirmed?: boolean;
 };
+
+function createCheckoutAttemptKey() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `checkout-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function formatMoney(value: number) {
   return `$${value.toFixed(2)}`;
@@ -150,6 +160,14 @@ export default function CheckoutClient() {
     status: "idle",
   });
   const [coords, setCoords] = useState<Coordinates | null>(null);
+  const [selectedAddress, setSelectedAddress] = useState<AddressSuggestion | null>(
+    null
+  );
+  const [deliveryInstructions, setDeliveryInstructions] = useState("");
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [checkoutAttemptKey, setCheckoutAttemptKey] = useState(
+    createCheckoutAttemptKey
+  );
   const [creatingIntent, setCreatingIntent] = useState(false);
   const [intentError, setIntentError] = useState<string | null>(null);
 
@@ -191,7 +209,9 @@ export default function CheckoutClient() {
   const canPlaceOrder =
     items.length > 0 &&
     !loading &&
-    (fulfillment === "pickup" || (deliveryEligible && meetsMinOrder));
+    ageConfirmed &&
+    (fulfillment === "pickup" ||
+      (deliveryEligible && meetsMinOrder && Boolean(selectedAddress || coords)));
 
   const addressQuery = useMemo(() => {
     const searchValue = addressSearch.trim();
@@ -218,6 +238,9 @@ export default function CheckoutClient() {
         ...stored.address,
         state: stored.address.state || "NJ",
       }));
+      setSelectedAddress(stored.selectedAddress ?? null);
+      setDeliveryInstructions(stored.deliveryInstructions ?? "");
+      setAgeConfirmed(stored.ageConfirmed === true);
       const label = formatAddressLabel(stored.address);
       if (label) {
         setAddressSearch(label);
@@ -270,6 +293,9 @@ export default function CheckoutClient() {
             setManualSearch(false);
           }
         }
+        setSelectedAddress(data.selectedAddress ?? null);
+        setDeliveryInstructions(data.deliveryInstructions ?? "");
+        setAgeConfirmed(data.ageConfirmed === true);
         if (data.coords) {
           setCoords(data.coords);
         }
@@ -312,6 +338,9 @@ export default function CheckoutClient() {
     const prefsBase: CheckoutPrefs = {
       fulfillmentType: fulfillment,
       address,
+      selectedAddress,
+      deliveryInstructions,
+      ageConfirmed,
     };
     if (typeof validation.distanceMiles === "number") {
       prefsBase.distanceMiles = validation.distanceMiles;
@@ -332,7 +361,53 @@ export default function CheckoutClient() {
         writeLocalPrefs(prefsBase);
       }
     }, 500);
-  }, [prefsReady, fulfillment, address, coords, validation.distanceMiles, user]);
+  }, [
+    prefsReady,
+    fulfillment,
+    address,
+    selectedAddress,
+    coords,
+    validation.distanceMiles,
+    deliveryInstructions,
+    ageConfirmed,
+    user,
+  ]);
+
+  const checkoutFingerprint = useMemo(
+    () =>
+      JSON.stringify({
+        items: items.map((item) => ({
+          productId: item.productId,
+          qty: item.qty,
+          price: item.price,
+        })),
+        fulfillment,
+        selectedAddressId: selectedAddress?.id ?? null,
+        coords,
+        apt: address.apt,
+        tipMode,
+        tipPercent,
+        customTip,
+        deliveryInstructions,
+        ageConfirmed,
+      }),
+    [
+      items,
+      fulfillment,
+      selectedAddress?.id,
+      coords,
+      address.apt,
+      tipMode,
+      tipPercent,
+      customTip,
+      deliveryInstructions,
+      ageConfirmed,
+    ]
+  );
+
+  useEffect(() => {
+    setCheckoutAttemptKey(createCheckoutAttemptKey());
+  }, [checkoutFingerprint]);
 
   useEffect(() => {
     if (fulfillment !== "delivery") {
@@ -410,6 +485,7 @@ export default function CheckoutClient() {
         if (match.label && addressSearch.trim() !== match.label) {
           setAddressSearch(match.label);
         }
+        setSelectedAddress(match);
       }
 
       const miles = await fetchDistance(resolvedCoords, controller.signal);
@@ -461,6 +537,7 @@ export default function CheckoutClient() {
     setSearchFocused(false);
     setSuggestions([]);
     setCoords(suggestion.coordinates);
+    setSelectedAddress(suggestion);
     void validateAddress(suggestion.coordinates);
   };
 
@@ -468,6 +545,7 @@ export default function CheckoutClient() {
     setAddress((prev) => ({ ...prev, [field]: value }));
     if (field !== "apt") {
       setCoords(null);
+      setSelectedAddress(null);
     }
   };
 
@@ -484,12 +562,16 @@ export default function CheckoutClient() {
         items: items.map((item) => ({
           productId: item.productId,
           qty: item.qty,
+          expectedPrice: item.price,
         })),
         fulfillment,
         address,
+        selectedAddress,
         coords,
-        distanceMiles: validation.distanceMiles,
         tipAmount: tipAmount,
+        ageVerified: ageConfirmed,
+        deliveryInstructions,
+        checkoutAttemptKey,
         idToken,
       };
 
@@ -511,7 +593,9 @@ export default function CheckoutClient() {
           tax: number;
           total: number;
           fulfillment: Fulfillment;
-          address?: Address;
+          ageVerified: boolean;
+          deliveryInstructions?: string;
+          address?: Address & { formatted?: string; placeId?: string };
           items: Array<{
             productId: string;
             name: string;
@@ -602,6 +686,10 @@ export default function CheckoutClient() {
             <h2 className="text-lg font-semibold text-zinc-900">
               Delivery address
             </h2>
+            <p className="text-sm text-zinc-600">
+              Choose a suggested address so we can confirm delivery eligibility,
+              fees, and tax before payment.
+            </p>
             <div className="space-y-2">
               <label className="text-sm font-medium text-zinc-700">
                 Address search
@@ -614,6 +702,7 @@ export default function CheckoutClient() {
                     setAddressSearch(event.target.value);
                     setManualSearch(true);
                     setCoords(null);
+                    setSelectedAddress(null);
                   }}
                   onFocus={() => setSearchFocused(true)}
                   onBlur={() => {
@@ -675,6 +764,18 @@ export default function CheckoutClient() {
             </div>
 
             <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-700">
+                Delivery instructions
+              </label>
+              <textarea
+                value={deliveryInstructions}
+                onChange={(event) => setDeliveryInstructions(event.target.value)}
+                placeholder="Gate code, apartment access, leave at door, or other delivery notes"
+                className="min-h-24 w-full rounded-2xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+              />
+            </div>
+
+            <div className="space-y-2">
               {validation.status === "loading" ? (
                 <span className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
                   <span className="h-2 w-2 animate-pulse rounded-full bg-zinc-400" />
@@ -694,6 +795,11 @@ export default function CheckoutClient() {
               {validation.status === "error" ? (
                 <span className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs text-red-700">
                   {validation.message ?? "Unable to validate address."}
+                </span>
+              ) : null}
+              {selectedAddress ? (
+                <span className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-700">
+                  Using validated address: {selectedAddress.label}
                 </span>
               ) : null}
             </div>
@@ -757,6 +863,24 @@ export default function CheckoutClient() {
         ) : null}
 
         <Card className="space-y-3">
+          <h2 className="text-lg font-semibold text-zinc-900">
+            Age confirmation
+          </h2>
+          <label className="flex items-start gap-3 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(event) => setAgeConfirmed(event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900/20"
+            />
+            <span>
+              I confirm I am 21+ and will present a valid government-issued ID
+              at pickup or delivery.
+            </span>
+          </label>
+        </Card>
+
+        <Card className="space-y-3">
           <h2 className="text-lg font-semibold text-zinc-900">Policies</h2>
           <p className="text-sm text-zinc-600">
             By placing an order, you agree to the following policies.
@@ -795,11 +919,11 @@ export default function CheckoutClient() {
             ) : null}
             <div className="flex items-center justify-between">
               <span>Tax</span>
-              <span>Calculated at checkout</span>
+              <span>Recalculated before payment</span>
             </div>
           </div>
           <div className="flex items-center justify-between border-t border-zinc-200 pt-4 text-base font-semibold">
-            <span>Total</span>
+            <span>Estimated total</span>
             <span>{formatMoney(totals.total)}</span>
           </div>
           {!meetsMinOrder ? (
@@ -812,6 +936,11 @@ export default function CheckoutClient() {
               Validate your address to continue.
             </p>
           ) : null}
+          {!ageConfirmed ? (
+            <p className="text-xs text-amber-600">
+              Confirm you are 21+ before continuing to payment.
+            </p>
+          ) : null}
           {intentError ? (
             <p className="text-xs text-red-600">{intentError}</p>
           ) : null}
@@ -820,13 +949,13 @@ export default function CheckoutClient() {
             aria-disabled={!canPlaceOrder || creatingIntent}
             onClick={handleCreateIntent}
           >
-            {creatingIntent ? "Starting payment..." : "Pay now"}
+            {creatingIntent ? "Starting payment..." : "Continue to payment"}
           </Button>
         </Card>
 
         <Card className="space-y-2 text-xs text-zinc-500">
-          <p>Tax calculated at checkout.</p>
-          <p>Same-day delivery only.</p>
+          <p>Tax is recalculated on the server before payment.</p>
+          <p>Same-day delivery within 8 miles. Pickup remains available.</p>
         </Card>
       </div>
 
@@ -843,7 +972,7 @@ export default function CheckoutClient() {
             aria-disabled={!canPlaceOrder || creatingIntent}
             onClick={handleCreateIntent}
           >
-            {creatingIntent ? "Starting..." : "Pay now"}
+            {creatingIntent ? "Starting..." : "Continue to payment"}
           </Button>
         </div>
       </div>

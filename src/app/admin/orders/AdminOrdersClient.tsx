@@ -849,6 +849,7 @@ export default function AdminOrdersClient() {
                   <p>Subtotal {formatMoney(order.subtotal)}</p>
                   <p>Tax {formatMoney(order.tax)} | Tip {formatMoney(order.tip)}</p>
                   <p>Fulfillment status: {ADMIN_STATUS_LABELS[normalizedStatus]}</p>
+                  <p>Age verification: {order.ageVerified ? "21+ confirmed" : "Pending"}</p>
                 </div>
               </div>
 
@@ -892,6 +893,9 @@ export default function AdminOrdersClient() {
 
               <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2 text-sm text-zinc-600`}>
                 <p>Order notes: {order.statusNote ?? "-"}</p>
+                {order.deliveryInstructions ? (
+                  <p>Delivery instructions: {order.deliveryInstructions}</p>
+                ) : null}
                 {order.cancellationReason ? (
                   <p className="text-red-600">Cancel reason: {order.cancellationReason}</p>
                 ) : null}
