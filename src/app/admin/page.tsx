@@ -30,6 +30,13 @@ export default function AdminPage() {
           </Link>{" "}
           to review image candidates before running the attach script.
         </p>
+        <p className="text-xs text-zinc-500">
+          Go to{" "}
+          <Link href="/admin/analytics" className="font-medium text-zinc-700 underline underline-offset-2">
+            /admin/analytics
+          </Link>{" "}
+          to review order, revenue, fulfillment, and operational metrics.
+        </p>
       </Card>
     </div>
   );
