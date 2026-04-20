@@ -97,7 +97,7 @@ function KpiCard({
 
 function LoadingDashboard() {
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 overflow-x-hidden">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {Array.from({ length: 6 }).map((_, index) => (
           <Card key={index} className="space-y-3 p-4 sm:p-5">
@@ -621,7 +621,7 @@ export default function AdminAnalyticsClient() {
 
       {!loadingData && !error && data && hasOrders ? (
         <div className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {kpis.map((kpi, index) => (
               <KpiCard
                 key={kpi.label}
@@ -633,7 +633,7 @@ export default function AdminAnalyticsClient() {
             ))}
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid min-w-0 gap-4 xl:grid-cols-2">
             <TrendChartCard
               title="Revenue by day"
               description="Paid revenue from valid orders in the selected range."
@@ -652,7 +652,7 @@ export default function AdminAnalyticsClient() {
             />
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid min-w-0 gap-4 xl:grid-cols-2">
             <Card className="space-y-4 p-4 sm:p-5">
               <div className="space-y-1">
                 <h2 className="text-lg font-semibold text-zinc-900">
@@ -759,7 +759,7 @@ export default function AdminAnalyticsClient() {
             </Card>
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-2">
+          <div className="grid min-w-0 gap-4 xl:grid-cols-2">
             <Card className="space-y-4 p-4 sm:p-5">
               <div className="space-y-1">
                 <h2 className="text-lg font-semibold text-zinc-900">

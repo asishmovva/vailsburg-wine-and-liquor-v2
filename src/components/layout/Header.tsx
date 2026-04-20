@@ -81,7 +81,7 @@ export function Header() {
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-200 bg-white/90 backdrop-blur">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="hidden h-16 items-center justify-between md:flex">
+        <div className="hidden h-16 items-center justify-between lg:flex">
           <Link
             href="/"
             className="text-lg font-semibold tracking-tight text-zinc-900"
@@ -141,31 +141,43 @@ export function Header() {
           </div>
         </div>
 
-        <div className="flex h-16 items-center justify-between md:hidden">
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 text-zinc-700"
-            aria-label="Open menu"
-          >
-            <IconMenu />
-          </button>
-          <Link
-            href="/"
-            className="text-base font-semibold tracking-tight text-zinc-900"
-          >
-            Vailsburg Wine & Liquor
-          </Link>
-          <Link
-            href="/cart"
-            className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 text-zinc-700"
-            aria-label="Cart"
-          >
-            <IconCart />
-            <Badge className="absolute -right-2 -top-2 h-5 min-w-5 justify-center px-1">
-              {totalQty}
-            </Badge>
-          </Link>
+        <div className="py-3 lg:hidden">
+          <div className="flex items-start justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-200 text-zinc-700"
+              aria-label="Open menu"
+            >
+              <IconMenu />
+            </button>
+            <Link
+              href="/"
+              className="min-w-0 flex-1 text-left text-base font-semibold leading-tight tracking-tight text-zinc-900"
+            >
+              <span className="block max-w-[11rem] sm:max-w-none">
+                Vailsburg Wine & Liquor
+              </span>
+            </Link>
+            <Link
+              href="/cart"
+              className="relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-200 text-zinc-700"
+              aria-label="Cart"
+            >
+              <IconCart />
+              <Badge className="absolute -right-2 -top-2 h-5 min-w-5 justify-center px-1">
+                {totalQty}
+              </Badge>
+            </Link>
+          </div>
+
+          <form action="/shop" method="get" className="mt-3 flex w-full">
+            <Input
+              name="q"
+              placeholder="Search wine, beer, spirits..."
+              aria-label="Search"
+            />
+          </form>
         </div>
       </div>
 
@@ -267,7 +279,7 @@ function MobileNavDrawer({
 }) {
   return (
     <div
-      className={`fixed inset-0 z-50 transition-opacity md:hidden ${
+      className={`fixed inset-0 z-50 transition-opacity lg:hidden ${
         open ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"
       }`}
       aria-hidden={!open}
