@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/Input";
 import { toast } from "@/components/ui/Toast";
 import { useAuth } from "@/hooks/useAuth";
 import { useRole } from "@/hooks/useRole";
+import { getOrderStaleState } from "@/lib/ops/staleOrders";
 import {
   getMissedNotificationCandidates,
   getNotificationEventLabel,
@@ -27,7 +28,6 @@ import {
   ADMIN_STATUS_LABELS,
   getAdminPrimaryActionLabel,
   getAllowedNextStatuses,
-  isFinalAdminOrderStatus,
   normalizeAdminOrderStatus,
   type AdminOrderStatus,
 } from "@/lib/orders/adminStatusTransitions";
@@ -57,7 +57,6 @@ const STATUS_STYLES: Record<AdminOrderStatus, string> = {
 };
 
 const NEW_PULSE_MS = 30000;
-const DELAYED_MINUTES = 15;
 const POLL_INTERVAL_MS = 15000;
 const STALE_AFTER_MS = 45000;
 
@@ -718,6 +717,7 @@ export default function AdminOrdersClient() {
         {filteredOrders.map((order) => {
           const normalizedStatus = getNormalizedStatus(order);
           const createdAt = parseDate(order.createdAt);
+          const staleState = getOrderStaleState(order);
           const customer = getCustomerDisplay(order);
           const isExpanded = expandedOrderId === order.id;
           const primaryAction = getPrimaryAction(order);
@@ -762,9 +762,7 @@ export default function AdminOrdersClient() {
                       <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse print:hidden" />
                     ) : null}
                     <span>Order #{orderNumberFromId(order.id)}</span>
-                    {createdAt &&
-                    !isFinalAdminOrderStatus(order.status) &&
-                    Date.now() - createdAt.getTime() > DELAYED_MINUTES * 60 * 1000 ? (
+                    {staleState.isStale ? (
                       <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
                         Delayed
                       </span>
@@ -895,6 +893,13 @@ export default function AdminOrdersClient() {
                 <p>Order notes: {order.statusNote ?? "-"}</p>
                 {order.deliveryInstructions ? (
                   <p>Delivery instructions: {order.deliveryInstructions}</p>
+                ) : null}
+                {order.notifications?.emailLastError || order.alerts?.emailLastError ? (
+                  <p className="font-medium text-red-600">
+                    Notification issue:{" "}
+                    {order.notifications?.emailLastError ??
+                      order.alerts?.emailLastError}
+                  </p>
                 ) : null}
                 {order.cancellationReason ? (
                   <p className="text-red-600">Cancel reason: {order.cancellationReason}</p>

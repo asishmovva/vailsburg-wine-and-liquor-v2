@@ -1,52 +1,36 @@
-import { NextResponse } from "next/server";
-import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
+import { NextResponse, type NextRequest } from "next/server";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
+import { requireAdmin } from "@/lib/server/requireAdmin";
 import { getSypramSyncOverview, syncSypramToFirestore } from "@/lib/sypram/sync";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-async function requireAdmin(request: Request) {
-  const authHeader = request.headers.get("authorization") ?? "";
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.replace("Bearer ", "")
-    : "";
-
-  if (!token) {
-    return { ok: false, status: 401, error: "Unauthorized." } as const;
-  }
+export async function GET(request: NextRequest) {
+  const admin = await requireAdmin(request);
+  if (admin.error) return admin.error;
 
   try {
-    const decoded = await adminAuth().verifyIdToken(token);
-    const userDoc = await adminDb().collection("users").doc(decoded.uid).get();
-    const role = userDoc.data()?.role ?? "customer";
-    if (role !== "admin") {
-      return { ok: false, status: 403, error: "Forbidden." } as const;
-    }
-    return {
-      ok: true,
-      uid: decoded.uid,
-      email: decoded.email ?? null,
-    } as const;
-  } catch {
-    return { ok: false, status: 401, error: "Unauthorized." } as const;
+    const overview = await getSypramSyncOverview();
+    return NextResponse.json(overview);
+  } catch (error) {
+    await logError({
+      source: "api/admin/sypram/sync",
+      eventType: "SYNC_FAILURE",
+      severity: "error",
+      message: "Failed to fetch Sypram sync overview.",
+      error,
+      userId: admin.uid,
+      persist: true,
+    });
+    return NextResponse.json({ error: "Unable to load sync overview." }, { status: 500 });
   }
 }
 
-export async function GET(request: Request) {
-  const auth = await requireAdmin(request);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
-  }
-
-  const overview = await getSypramSyncOverview();
-  return NextResponse.json(overview);
-}
-
-export async function POST(request: Request) {
-  const auth = await requireAdmin(request);
-  if (!auth.ok) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
-  }
+export async function POST(request: NextRequest) {
+  const admin = await requireAdmin(request);
+  if (admin.error) return admin.error;
 
   let dryRun = false;
   try {
@@ -58,10 +42,23 @@ export async function POST(request: Request) {
 
   const result = await syncSypramToFirestore({
     dryRun,
-    requestedBy: auth.email ?? auth.uid,
+    requestedBy: admin.email ?? admin.uid,
   });
 
   if (!result.ok) {
+    await logEvent({
+      source: "api/admin/sypram/sync",
+      eventType: "SYNC_FAILURE",
+      severity: "warning",
+      message: "Sypram sync blocked by cooldown.",
+      userId: admin.uid,
+      details: {
+        dryRun,
+        nextAllowedAt: result.nextAllowedAt,
+        lastRunAt: result.lastRunAt ?? null,
+      },
+      persist: true,
+    });
     return NextResponse.json(
       {
         error: "cooldown_active",
@@ -73,6 +70,20 @@ export async function POST(request: Request) {
       { status: 429 }
     );
   }
+
+  await logEvent({
+    source: "api/admin/sypram/sync",
+    eventType: "SYPRAM_SYNC_TRIGGERED",
+    severity: "info",
+    message: "Sypram sync run completed via admin trigger.",
+    userId: admin.uid,
+    details: {
+      dryRun,
+      runId: result.summary.runId,
+      status: result.summary.errors > 0 ? "failed" : "success",
+    },
+    persist: result.summary.errors > 0,
+  });
 
   return NextResponse.json(result);
 }

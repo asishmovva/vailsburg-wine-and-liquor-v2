@@ -366,10 +366,11 @@ export default function ProductClient({ id }: { id: string }) {
         <Card className="space-y-4">
           <div className="aspect-[4/3] w-full overflow-hidden rounded-2xl">
             {product.image ? (
-              <div
-                className="h-full w-full bg-cover bg-center"
-                style={{ backgroundImage: `url(${product.image})` }}
-                aria-label={product.name}
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={product.image}
+                alt={product.name}
+                className="h-full w-full bg-zinc-100 object-contain object-center p-3"
               />
             ) : (
               <div

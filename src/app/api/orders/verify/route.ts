@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
 import type { OrderNotifications } from "@/lib/orders/types";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import { getStripe } from "@/lib/stripe";
@@ -99,6 +101,21 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Forbidden." }, { status: 403 });
   }
 
+  await logEvent({
+    source: "api/orders/verify",
+    eventType: "PAYMENT_VERIFICATION_FALLBACK_TRIGGERED",
+    severity: "warning",
+    message: "Order verification fallback route triggered.",
+    orderId,
+    userId,
+    details: {
+      currentStatus: order.status ?? null,
+      hasCheckoutSession: Boolean(order.stripe?.checkoutSessionId),
+      hasPaymentIntent: Boolean(order.stripe?.paymentIntentId),
+    },
+    persist: true,
+  });
+
   const normalizedStatus = normalizeStatus(order.status);
   if (isFinalStatus(normalizedStatus)) {
     return NextResponse.json({ status: normalizedStatus, updated: false });
@@ -121,7 +138,17 @@ export async function GET(request: Request) {
       const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
       isPaid = intent.status === "succeeded";
     }
-  } catch {
+  } catch (error) {
+    await logError({
+      source: "api/orders/verify",
+      eventType: "PAYMENT_VERIFICATION_PROVIDER_FAIL",
+      severity: "error",
+      message: "Stripe verification failed during fallback check.",
+      error,
+      orderId,
+      userId,
+      persist: true,
+    });
     return NextResponse.json({ status: normalizedStatus, updated: false }, { status: 200 });
   }
 
@@ -200,11 +227,18 @@ export async function GET(request: Request) {
     eventKey: "ORDER_RECEIVED",
   });
 
-  console.log("[orders:verify]", {
+  await logEvent({
+    source: "api/orders/verify",
+    eventType: "PAYMENT_VERIFICATION_FALLBACK_COMPLETED",
+    severity: "info",
+    message: "Fallback verification marked order paid.",
     orderId,
-    status: ORDER_STATUSES.NEW,
-    paymentIntentId: paymentIntentId ?? null,
-    checkoutSessionId: checkoutSessionId ?? null,
+    userId,
+    details: {
+      status: ORDER_STATUSES.NEW,
+      paymentIntentId: paymentIntentId ?? null,
+      checkoutSessionId: checkoutSessionId ?? null,
+    },
   });
 
   return NextResponse.json({ status: ORDER_STATUSES.NEW, updated: true });

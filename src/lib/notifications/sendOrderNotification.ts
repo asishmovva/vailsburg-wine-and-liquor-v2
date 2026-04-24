@@ -3,6 +3,8 @@ import "server-only";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { sendEmailWithFallback } from "@/lib/email";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
 import {
   buildCustomerOrderEmail,
   buildNewOrderEmail,
@@ -185,11 +187,18 @@ async function writeNotificationLog({
         actorEmail: actorEmail ?? null,
         createdAt: FieldValue.serverTimestamp(),
       });
-  } catch (logError) {
-    console.error("[notifications] log_write_failed", {
+  } catch (logWriteError) {
+    await logError({
+      source: "notifications/sendOrderNotification",
+      eventType: "NOTIFICATION_LOG_WRITE_FAIL",
+      severity: "warning",
+      message: "Failed to write notification log document.",
+      error: logWriteError,
       orderId,
-      eventKey,
-      reason: (logError as Error).message,
+      details: {
+        eventKey,
+      },
+      persist: true,
     });
   }
 }
@@ -260,6 +269,17 @@ export async function sendOrderNotification({
       actorUid,
       actorEmail,
     });
+    await logEvent({
+      source: "notifications/sendOrderNotification",
+      eventType: "NOTIFICATION_DUPLICATE_SKIP",
+      severity: "info",
+      message: "Notification skipped because it was already sent.",
+      orderId,
+      userId: orderData.userId ?? null,
+      details: {
+        eventKey,
+      },
+    });
     return {
       ok: true,
       status: "skipped_duplicate",
@@ -284,6 +304,19 @@ export async function sendOrderNotification({
       manual: true,
       actorUid,
       actorEmail,
+    });
+    await logEvent({
+      source: "notifications/sendOrderNotification",
+      eventType: "NOTIFICATION_SEND_FAILURE",
+      severity: "warning",
+      message: "Manual notification resend blocked by cooldown.",
+      orderId,
+      userId: orderData.userId ?? null,
+      details: {
+        eventKey,
+        reason: "manual_resend_cooldown",
+      },
+      persist: true,
     });
     return {
       ok: false,
@@ -318,6 +351,19 @@ export async function sendOrderNotification({
       manual,
       actorUid,
       actorEmail,
+    });
+    await logEvent({
+      source: "notifications/sendOrderNotification",
+      eventType: "NOTIFICATION_SEND_FAILURE",
+      severity: "error",
+      message: "Notification sender or recipient is missing.",
+      orderId,
+      userId: orderData.userId ?? null,
+      details: {
+        eventKey,
+        error,
+      },
+      persist: true,
     });
     return { ok: false, status: "failed", error };
   }
@@ -372,11 +418,17 @@ export async function sendOrderNotification({
       actorUid,
       actorEmail,
     });
-
-    console.log("[notifications] sent", {
+    await logEvent({
+      source: "notifications/sendOrderNotification",
+      eventType: "NOTIFICATION_SENT",
+      severity: "info",
+      message: "Order notification sent.",
       orderId,
-      eventKey,
-      provider: result.provider ?? null,
+      userId: orderData.userId ?? null,
+      details: {
+        eventKey,
+        provider: result.provider ?? null,
+      },
     });
 
     return {
@@ -409,12 +461,25 @@ export async function sendOrderNotification({
     actorUid,
     actorEmail,
   });
-
-  console.log("[notifications] failed", {
+  const allAttemptsFailed =
+    Array.isArray(result.attempts) && result.attempts.length > 0
+      ? result.attempts.every((attempt) => !attempt.ok)
+      : true;
+  await logEvent({
+    source: "notifications/sendOrderNotification",
+    eventType: "NOTIFICATION_SEND_FAILURE",
+    severity: "error",
+    message: "Order notification failed to send.",
     orderId,
-    eventKey,
-    provider: result.provider ?? null,
-    error,
+    userId: orderData.userId ?? null,
+    details: {
+      eventKey,
+      provider: result.provider ?? null,
+      error,
+      attempts: result.attempts ?? null,
+      allAttemptsFailed,
+    },
+    persist: true,
   });
 
   return {

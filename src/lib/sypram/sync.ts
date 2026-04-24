@@ -3,6 +3,8 @@ import "server-only";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { getSellability, normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
 import { fetchSypramItems } from "@/lib/sypram/client";
 import { mapItemToProduct, type MappedProduct } from "@/lib/sypram/mapItemToProduct";
 
@@ -127,6 +129,19 @@ export async function syncSypramToFirestore(
   const lastRunAt = state.lastRunAt?.toDate?.() ?? null;
   const cooldown = getCooldownInfo(lastRunAt);
   if (cooldown.cooldownActive) {
+    await logEvent({
+      source: "sypram/sync",
+      eventType: "SYPRAM_SYNC_COOLDOWN_ACTIVE",
+      severity: "warning",
+      message: "Sypram sync blocked by cooldown window.",
+      userId: requestedBy ?? null,
+      details: {
+        dryRun,
+        nextAllowedAt: cooldown.nextAllowedAt.toISOString(),
+        lastRunAt: toIso(lastRunAt),
+      },
+      persist: true,
+    });
     return {
       ok: false,
       cooldownActive: true,
@@ -269,6 +284,19 @@ export async function syncSypramToFirestore(
     if (errors.length < 20) {
       errors.push((error as Error).message ?? "Unknown error");
     }
+    await logError({
+      source: "sypram/sync",
+      eventType: "SYPRAM_SYNC_FAILURE",
+      severity: "error",
+      message: "Sypram sync failed before completion.",
+      error,
+      userId: requestedBy ?? null,
+      details: {
+        dryRun,
+        runId,
+      },
+      persist: true,
+    });
   }
 
   const summary: SyncSummary = {
@@ -317,6 +345,36 @@ export async function syncSypramToFirestore(
         },
         { merge: true }
       );
+  }
+
+  if (status === "failed") {
+    await logEvent({
+      source: "sypram/sync",
+      eventType: "SYNC_FAILURE",
+      severity: "error",
+      message: "Sypram sync completed with errors.",
+      userId: requestedBy ?? null,
+      details: {
+        runId,
+        counts,
+        dryRun,
+        errors,
+      },
+      persist: true,
+    });
+  } else {
+    await logEvent({
+      source: "sypram/sync",
+      eventType: "SYPRAM_SYNC_SUCCESS",
+      severity: "info",
+      message: "Sypram sync completed successfully.",
+      userId: requestedBy ?? null,
+      details: {
+        runId,
+        counts,
+        dryRun,
+      },
+    });
   }
 
   return { ok: true, summary, errors };

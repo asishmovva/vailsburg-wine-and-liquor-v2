@@ -4,6 +4,10 @@ import { HeroCarousel } from "@/components/home/HeroCarousel";
 import { ProductGrid } from "@/components/products/ProductGrid";
 import type { ProductCardItem } from "@/components/products/ProductCard";
 import { Card } from "@/components/ui/Card";
+import { getHomeSectionsConfig } from "@/lib/homeSections";
+import { getProductById } from "@/services/product";
+
+export const revalidate = 300;
 
 const heroSlides = [
   {
@@ -55,33 +59,43 @@ const trustItems = [
   { label: "Pickup available", detail: "Order ahead" },
 ];
 
-const buildMockProducts = (prefix: string): ProductCardItem[] =>
-  Array.from({ length: 6 }).map((_, index) => ({
-    id: `${prefix}-${index}`,
-    name: `${prefix} Bottle ${index + 1}`,
-    price: "$0.00",
-    imageUrl: null,
+function formatPrice(value: number) {
+  return `$${value.toFixed(2)}`;
+}
+
+async function buildHomeSections() {
+  const { sections } = await getHomeSectionsConfig();
+  const uniqueIds = Array.from(new Set(sections.flatMap((section) => section.productIds)));
+  const products = await Promise.all(
+    uniqueIds.map(async (id) => [id, await getProductById(id)] as const)
+  );
+  const productMap = new Map(products);
+
+  return sections.map((section) => ({
+    ...section,
+    items: section.productIds
+      .map((id) => productMap.get(id))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      .map(
+        (item): ProductCardItem => ({
+          id: item.id,
+          name: item.name,
+          price: formatPrice(item.price),
+          priceValue: item.price,
+          imageUrl: item.image || null,
+          category: item.category,
+          size: item.size,
+          pack: item.pack,
+          stock: item.stock,
+          inStock: item.inStock,
+        })
+      ),
   }));
+}
 
-const productSections = [
-  {
-    title: "Top Deals",
-    href: "/shop?tag=deals",
-    items: buildMockProducts("Deal"),
-  },
-  {
-    title: "Top Shelf Picks",
-    href: "/shop?tag=top-shelf",
-    items: buildMockProducts("Top Shelf"),
-  },
-  {
-    title: "Popular (coming soon)",
-    href: "/shop?sort=popular",
-    items: buildMockProducts("Popular"),
-  },
-];
+export default async function Home() {
+  const productSections = await buildHomeSections();
 
-export default function Home() {
   return (
     <div className="space-y-12">
       <HeroCarousel slides={heroSlides} />

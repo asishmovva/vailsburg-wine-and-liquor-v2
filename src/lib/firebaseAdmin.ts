@@ -1,14 +1,23 @@
-﻿import "server-only";
+import "server-only";
 
 import { cert, getApps, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
+import { getStorage } from "firebase-admin/storage";
 
 let adminApp: App | null = getApps().length ? getApps()[0] : null;
 
 function getPrivateKey() {
   const key = process.env.FIREBASE_PRIVATE_KEY;
   return key ? key.replace(/\\n/g, "\n") : undefined;
+}
+
+function getStorageBucketName() {
+  return (
+    process.env.FIREBASE_STORAGE_BUCKET ??
+    process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ??
+    ""
+  ).trim();
 }
 
 export function getAdminApp() {
@@ -41,3 +50,12 @@ export function adminDb() {
   const databaseId = process.env.FIREBASE_DATABASE_ID ?? "(default)";
   return getFirestore(getAdminApp(), databaseId);
 }
+
+export function adminStorageBucket() {
+  const bucketName = getStorageBucketName();
+  if (!bucketName) {
+    throw new Error("Missing FIREBASE_STORAGE_BUCKET in env vars.");
+  }
+  return getStorage(getAdminApp()).bucket(bucketName);
+}
+

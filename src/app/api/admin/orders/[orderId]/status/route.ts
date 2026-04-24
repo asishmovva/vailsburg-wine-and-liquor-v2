@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import {
   ADMIN_ORDER_STATUSES,
@@ -83,6 +85,14 @@ export async function POST(
 
   const { orderId } = await context.params;
   if (!orderId) {
+    await logEvent({
+      source: "api/admin/orders/status",
+      eventType: "ADMIN_ORDER_MUTATION_FAIL",
+      severity: "warning",
+      message: "Missing orderId for admin status mutation.",
+      userId: admin.uid,
+      persist: true,
+    });
     return NextResponse.json({ error: "Missing orderId." }, { status: 400 });
   }
 
@@ -238,13 +248,50 @@ export async function POST(
     });
   } catch (error) {
     if (error instanceof MutationError) {
+      await logEvent({
+        source: "api/admin/orders/status",
+        eventType: "ADMIN_ORDER_MUTATION_FAIL",
+        severity: "warning",
+        message: error.message,
+        orderId,
+        userId: admin.uid,
+        details: {
+          statusCode: error.statusCode,
+          nextStatus: nextStatus ?? null,
+          refundStatus: refundStatus ?? null,
+        },
+        persist: true,
+      });
       return NextResponse.json({ error: error.message }, { status: error.statusCode });
     }
 
-    throw error;
+    await logError({
+      source: "api/admin/orders/status",
+      eventType: "ADMIN_ORDER_MUTATION_FAIL",
+      severity: "error",
+      message: "Unhandled admin order status mutation failure.",
+      error,
+      orderId,
+      userId: admin.uid,
+      details: {
+        nextStatus: nextStatus ?? null,
+        refundStatus: refundStatus ?? null,
+      },
+      persist: true,
+    });
+    return NextResponse.json({ error: "Order update failed." }, { status: 500 });
   }
 
   if (!updatedOrder) {
+    await logEvent({
+      source: "api/admin/orders/status",
+      eventType: "ADMIN_ORDER_MUTATION_FAIL",
+      severity: "error",
+      message: "Order update returned no updated payload.",
+      orderId,
+      userId: admin.uid,
+      persist: true,
+    });
     return NextResponse.json({ error: "Order update failed." }, { status: 500 });
   }
 
@@ -354,8 +401,40 @@ export async function POST(
   }
 
   if (notificationTasks.length > 0) {
-    await Promise.allSettled(notificationTasks);
+    const notificationResults = await Promise.allSettled(notificationTasks);
+    const failedNotifications = notificationResults.filter(
+      (result) => result.status === "rejected"
+    );
+    if (failedNotifications.length > 0) {
+      await logEvent({
+        source: "api/admin/orders/status",
+        eventType: "NOTIFICATION_SEND_FAILURE",
+        severity: "error",
+        message: "One or more status-triggered notifications failed.",
+        orderId,
+        userId: admin.uid,
+        details: {
+          failedCount: failedNotifications.length,
+          nextStatus: nextStatus ?? null,
+          refundStatus: refundStatus ?? null,
+        },
+        persist: true,
+      });
+    }
   }
+
+  await logEvent({
+    source: "api/admin/orders/status",
+    eventType: "ADMIN_ORDER_MUTATION_SUCCESS",
+    severity: "info",
+    message: "Admin order status mutation applied.",
+    orderId,
+    userId: admin.uid,
+    details: {
+      status: orderAfterUpdate.status ?? null,
+      refundStatus: orderAfterUpdate.refundStatus ?? null,
+    },
+  });
 
   return NextResponse.json({
     ok: true,

@@ -3,6 +3,8 @@ import path from "path";
 import { randomUUID } from "crypto";
 import sharp from "sharp";
 import { FieldValue } from "firebase-admin/firestore";
+import { logError } from "../src/lib/ops/logError";
+import { logEvent } from "../src/lib/ops/logEvent";
 import type { MatchOutputRecord } from "./lib/imageMatchingTypes";
 import { loadEnvFromFile } from "./lib/env";
 import { getFirestoreDb, getStorageBucket } from "./lib/firebaseAdmin";
@@ -88,6 +90,19 @@ function getImportCategory(record: ApprovedAttachRecord) {
 async function main() {
   loadEnvFromFile(".env.local");
   const { dryRun, limit, input, overwrite } = parseCommonArgs();
+  await logEvent({
+    source: "scripts/attachApprovedImages",
+    eventType: "IMAGE_ATTACH_RUN_STARTED",
+    severity: "info",
+    message: "Approved image attach run started.",
+    details: {
+      dryRun,
+      limit: limit ?? null,
+      input: input ?? "artifacts/approved_matches.json",
+      overwrite,
+    },
+  });
+
   const db = getFirestoreDb();
   const bucket = getStorageBucket();
 
@@ -147,9 +162,15 @@ async function main() {
           result: "error",
           reason: "Product doc missing.",
         });
-        console.error("Missing product for approved image:", {
-          productId,
-          sourceFilePath: imageFilePath,
+        await logEvent({
+          source: "scripts/attachApprovedImages",
+          eventType: "IMAGE_ATTACH_PRODUCT_MISSING",
+          severity: "warning",
+          message: "Product doc missing for approved image attach.",
+          orderId: productId,
+          details: {
+            sourceFilePath: imageFilePath,
+          },
         });
         continue;
       }
@@ -253,10 +274,16 @@ async function main() {
         result: "error",
         reason: (error as Error).message,
       });
-      console.error("Failed to attach image:", {
-        productId,
-        sourceFilePath: imageFilePath,
-        error: (error as Error).message,
+      await logError({
+        source: "scripts/attachApprovedImages",
+        eventType: "IMAGE_ATTACH_FAILURE",
+        severity: "error",
+        message: "Failed to attach approved image.",
+        error,
+        orderId: productId,
+        details: {
+          sourceFilePath: imageFilePath,
+        },
       });
     }
   }
@@ -275,9 +302,29 @@ async function main() {
   writeArtifactFile("attach-summary.json", summary);
   writeArtifactFile("attach-results.json", results);
   printSummary("Approved image attach summary", summary);
+
+  await logEvent({
+    source: "scripts/attachApprovedImages",
+    eventType: errors > 0 ? "IMAGE_ATTACH_FAILURE" : "IMAGE_ATTACH_RUN_COMPLETED",
+    severity: errors > 0 ? "error" : "info",
+    message:
+      errors > 0
+        ? "Approved image attach run completed with errors."
+        : "Approved image attach run completed successfully.",
+    details: summary,
+    persist: errors > 0,
+  });
 }
 
 main().catch((error) => {
   console.error("Image attach failed:", error);
+  void logError({
+    source: "scripts/attachApprovedImages",
+    eventType: "IMAGE_ATTACH_FAILURE",
+    severity: "critical",
+    message: "Approved image attach script crashed.",
+    error,
+    persist: true,
+  });
   process.exit(1);
 });
