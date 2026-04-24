@@ -55,6 +55,7 @@ export default function AdminProductsClient() {
   const [pendingUploads, setPendingUploads] = useState<Record<string, PendingUpload>>(
     {}
   );
+  const pendingUploadsRef = useRef<Record<string, PendingUpload>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const queryString = useMemo(() => {
@@ -95,12 +96,16 @@ export default function AdminProductsClient() {
   }, [loadProducts]);
 
   useEffect(() => {
+    pendingUploadsRef.current = pendingUploads;
+  }, [pendingUploads]);
+
+  useEffect(() => {
     return () => {
-      Object.values(pendingUploads).forEach((upload) => {
+      Object.values(pendingUploadsRef.current).forEach((upload) => {
         URL.revokeObjectURL(upload.previewUrl);
       });
     };
-  }, [pendingUploads]);
+  }, []);
 
   const onChooseFile = (productId: string, file: File | null) => {
     if (!file) return;
@@ -367,4 +372,3 @@ export default function AdminProductsClient() {
     </div>
   );
 }
-

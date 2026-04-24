@@ -28,14 +28,13 @@ export async function GET(req: NextRequest) {
 
   const db = adminDb();
   const queryStatuses = getAdminStatusQueryValues(status);
-  const perStatusLimit = Math.max(1, Math.ceil(limit / queryStatuses.length));
   const snapshots = await Promise.all(
     queryStatuses.map((queryStatus) =>
       db
         .collection("orders")
         .where("status", "==", queryStatus)
         .orderBy("createdAt", "desc")
-        .limit(perStatusLimit)
+        .limit(limit)
         .get()
     )
   );
