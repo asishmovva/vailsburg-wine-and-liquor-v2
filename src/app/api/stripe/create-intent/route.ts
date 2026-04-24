@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
 import { getStripe } from "@/lib/stripe";
 import { ORDER_STATUSES } from "@/lib/orders/status";
 import { resolveProductImage } from "@/services/productImage";
@@ -90,14 +92,62 @@ function normalizeText(value?: string | null) {
   return value?.toString().trim() ?? "";
 }
 
+const IMPORTANT_CHECKOUT_FAILURE_CODES = new Set([
+  "CHECKOUT_RADIUS_FAIL",
+  "CHECKOUT_AGE_VERIFICATION_FAIL",
+  "CHECKOUT_MIN_ORDER_FAIL",
+  "CHECKOUT_STOCK_FAIL",
+  "CHECKOUT_PRICE_MISMATCH",
+  "CHECKOUT_PAYMENT_FAIL",
+  "CHECKOUT_DUPLICATE_SUBMISSION_BLOCKED",
+]);
+
+function toCheckoutFailureCode(code: string) {
+  switch (code) {
+    case "delivery_radius_exceeded":
+      return "CHECKOUT_RADIUS_FAIL";
+    case "age_verification_required":
+      return "CHECKOUT_AGE_VERIFICATION_FAIL";
+    case "minimum_delivery_order":
+      return "CHECKOUT_MIN_ORDER_FAIL";
+    case "items_out_of_stock":
+      return "CHECKOUT_STOCK_FAIL";
+    case "price_mismatch":
+      return "CHECKOUT_PRICE_MISMATCH";
+    case "payment_intent_failed":
+      return "CHECKOUT_PAYMENT_FAIL";
+    case "duplicate_checkout_attempt":
+      return "CHECKOUT_DUPLICATE_SUBMISSION_BLOCKED";
+    case "delivery_address_invalid":
+    case "missing_delivery_coordinates":
+      return "CHECKOUT_ADDRESS_VALIDATION_FAIL";
+    default:
+      return "CHECKOUT_VALIDATION_FAIL";
+  }
+}
+
 function logCheckoutEvent(
-  level: "info" | "warn" | "error",
-  event: string,
-  meta: Record<string, unknown>
+  severity: "info" | "warning" | "error" | "critical",
+  eventType: string,
+  message: string,
+  details: Record<string, unknown>,
+  persist = false
 ) {
-  const logger =
-    level === "error" ? console.error : level === "warn" ? console.warn : console.log;
-  logger(`[checkout:${event}]`, meta);
+  const orderId =
+    typeof details.orderId === "string" ? details.orderId : undefined;
+  const userId =
+    typeof details.userId === "string" ? details.userId : undefined;
+
+  void logEvent({
+    source: "api/stripe/create-intent",
+    eventType,
+    severity,
+    message,
+    orderId,
+    userId,
+    details,
+    persist,
+  });
 }
 
 function getMapboxToken() {
@@ -254,7 +304,11 @@ function validationResponse(
   code: string,
   meta: Record<string, unknown>
 ) {
-  logCheckoutEvent("warn", code, meta);
+  const failureCode = toCheckoutFailureCode(code);
+  logCheckoutEvent("warning", failureCode, error, {
+    code,
+    ...meta,
+  }, IMPORTANT_CHECKOUT_FAILURE_CODES.has(failureCode));
   return NextResponse.json({ error, code }, { status });
 }
 
@@ -337,12 +391,17 @@ export async function POST(request: Request) {
             existingIntent.status !== "canceled" &&
             existingIntent.status !== "succeeded"
           ) {
-            logCheckoutEvent("info", "reuse_checkout_attempt", {
-              userId,
-              checkoutAttemptKey,
-              orderId: existingAttempt.data.id ?? existingAttempt.ref.id,
-              paymentIntentId: existingIntent.id,
-            });
+            logCheckoutEvent(
+              "info",
+              "CHECKOUT_DUPLICATE_SUBMISSION_BLOCKED",
+              "Reused existing checkout attempt.",
+              {
+                userId,
+                checkoutAttemptKey,
+                orderId: existingAttempt.data.id ?? existingAttempt.ref.id,
+                paymentIntentId: existingIntent.id,
+              }
+            );
 
             return NextResponse.json({
               clientSecret: existingIntent.client_secret,
@@ -350,10 +409,17 @@ export async function POST(request: Request) {
             });
           }
         } catch (error) {
-          logCheckoutEvent("warn", "reuse_checkout_attempt_failed", {
+          await logError({
+            source: "api/stripe/create-intent",
+            eventType: "CHECKOUT_DUPLICATE_LOOKUP_FAILED",
+            severity: "warning",
+            message: "Failed to validate prior checkout attempt.",
+            error,
             userId,
-            checkoutAttemptKey,
-            error: (error as Error).message,
+            details: {
+              checkoutAttemptKey,
+            },
+            persist: true,
           });
         }
       } else {
@@ -537,9 +603,14 @@ export async function POST(request: Request) {
       try {
         distanceMiles = await getDrivingDistanceMiles(deliveryAddress.coords);
       } catch (error) {
-        logCheckoutEvent("error", "delivery_distance_failed", {
+        await logError({
+          source: "api/stripe/create-intent",
+          eventType: "CHECKOUT_DISTANCE_PROVIDER_FAIL",
+          severity: "error",
+          message: "Delivery distance validation failed.",
+          error,
           userId,
-          error: (error as Error).message,
+          persist: true,
         });
         return NextResponse.json(
           { error: "Unable to validate delivery distance right now. Please try again." },
@@ -614,10 +685,17 @@ export async function POST(request: Request) {
         taxCents = Math.round(taxableSubtotalCents * TAX_RATE);
       }
     } catch (error) {
-      logCheckoutEvent("error", "tax_calculation_failed", {
+      await logError({
+        source: "api/stripe/create-intent",
+        eventType: "CHECKOUT_TAX_CALCULATION_FAIL",
+        severity: "error",
+        message: "Tax calculation failed during checkout.",
+        error,
         userId,
-        fulfillment,
-        error: (error as Error).message,
+        details: {
+          fulfillment,
+        },
+        persist: true,
       });
       return NextResponse.json(
         { error: "Unable to calculate tax right now. Please try again." },
@@ -656,10 +734,17 @@ export async function POST(request: Request) {
         }
       );
     } catch (error) {
-      logCheckoutEvent("error", "payment_intent_failed", {
+      await logError({
+        source: "api/stripe/create-intent",
+        eventType: "CHECKOUT_PAYMENT_FAIL",
+        severity: "critical",
+        message: "Stripe payment intent creation failed.",
+        error,
         userId,
-        checkoutAttemptKey,
-        error: (error as Error).message,
+        details: {
+          checkoutAttemptKey,
+        },
+        persist: true,
       });
       return NextResponse.json(
         { error: "Unable to start payment right now. Please try again." },
@@ -749,8 +834,13 @@ export async function POST(request: Request) {
       },
     });
   } catch (error) {
-    logCheckoutEvent("error", "create_intent_unhandled", {
-      error: (error as Error).message,
+    await logError({
+      source: "api/stripe/create-intent",
+      eventType: "CHECKOUT_UNHANDLED_ERROR",
+      severity: "critical",
+      message: "Unhandled checkout create-intent failure.",
+      error,
+      persist: true,
     });
     return NextResponse.json(
       { error: (error as Error).message || "Unable to create payment." },

@@ -94,6 +94,42 @@ SMTP_PASS=GMAIL_APP_PASSWORD
 
 For Gmail/Workspace, create an App Password (Google Account > Security > App passwords) and use it as `SMTP_PASS`.
 
+## Operations hardening (Phase 21)
+
+High-severity runtime failures are written to Firestore `opsLogs` with structured fields:
+
+- `source`
+- `eventType`
+- `orderId`
+- `userId`
+- `severity`
+- `message`
+- `details`
+- `createdAt`
+
+Admin system health endpoint:
+
+```text
+GET /api/admin/system-health
+```
+
+This powers a lightweight panel on `/admin` with:
+
+- failed notifications (recent)
+- stale open orders
+- failed sync events
+- last webhook event time
+- last Sypram sync status
+
+Admin order export endpoint:
+
+```text
+GET /api/admin/orders/export?start=YYYY-MM-DD&end=YYYY-MM-DD&format=csv
+GET /api/admin/orders/export?start=YYYY-MM-DD&end=YYYY-MM-DD&format=json
+```
+
+The CSV export is date-bounded and capped to keep Firestore reads predictable.
+
 ## Product image matching + rollout (Phase 16A / 16B)
 
 Local source images should live in a gitignored folder at the project root:

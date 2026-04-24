@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { logError } from "@/lib/ops/logError";
+import { logEvent } from "@/lib/ops/logEvent";
 import type { OrderNotifications } from "@/lib/orders/types";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import { getStripe } from "@/lib/stripe";
@@ -53,6 +55,13 @@ export async function POST(request: Request) {
   const stripe = getStripe();
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
+    await logEvent({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_SECRET_MISSING",
+      severity: "critical",
+      message: "STRIPE_WEBHOOK_SECRET is missing.",
+      persist: true,
+    });
     return NextResponse.json(
       { error: "Missing STRIPE_WEBHOOK_SECRET." },
       { status: 500 }
@@ -61,6 +70,13 @@ export async function POST(request: Request) {
 
   const signature = request.headers.get("stripe-signature");
   if (!signature) {
+    await logEvent({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_SIGNATURE_MISSING",
+      severity: "warning",
+      message: "Stripe webhook signature header missing.",
+      persist: true,
+    });
     return NextResponse.json({ error: "Missing signature." }, { status: 400 });
   }
 
@@ -70,8 +86,13 @@ export async function POST(request: Request) {
   try {
     event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
   } catch (error) {
-    console.error("[stripe:webhook] webhook_error", {
-      message: (error as Error).message,
+    await logError({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_SIGNATURE_VERIFICATION_FAIL",
+      severity: "error",
+      message: "Stripe webhook signature verification failed.",
+      error,
+      persist: true,
     });
     return NextResponse.json(
       { error: `Webhook Error: ${(error as Error).message}` },
@@ -104,12 +125,18 @@ export async function POST(request: Request) {
     orderIdFromEvent = session.metadata?.orderId;
   }
 
-  console.log("[stripe:webhook] webhook_verified", {
-    eventId,
-    eventType,
+  await logEvent({
+    source: "api/stripe/webhook",
+    eventType: "WEBHOOK_VERIFIED",
+    severity: "info",
+    message: "Stripe webhook verified.",
     orderId: orderIdFromEvent ?? null,
-    paymentIntentId: paymentIntentId ?? null,
-    checkoutSessionId: checkoutSessionId ?? null,
+    details: {
+      eventId,
+      eventType,
+      paymentIntentId: paymentIntentId ?? null,
+      checkoutSessionId: checkoutSessionId ?? null,
+    },
   });
 
   const eventRef = db.collection("stripeEvents").doc(eventId);
@@ -125,16 +152,37 @@ export async function POST(request: Request) {
   } catch (error) {
     const code = (error as { code?: string | number }).code;
     if (code === 6 || code === "already-exists") {
-      console.log("[stripe:webhook] order_exists_skip", {
-        eventId,
-        eventType,
+      await logEvent({
+        source: "api/stripe/webhook",
+        eventType: "WEBHOOK_DUPLICATE_EVENT_SKIP",
+        severity: "info",
+        message: "Duplicate webhook event skipped.",
         orderId: orderIdFromEvent ?? null,
+        details: {
+          eventId,
+          eventType,
+        },
       });
       return NextResponse.json({ received: true, duplicate: true });
     }
-    console.error("[stripe:webhook] webhook_error", { eventId, eventType, code });
+    await logError({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_IDEMPOTENCY_WRITE_FAIL",
+      severity: "critical",
+      message: "Failed to persist Stripe webhook idempotency marker.",
+      error,
+      orderId: orderIdFromEvent ?? null,
+      details: {
+        eventId,
+        eventType,
+        code: code ?? null,
+      },
+      persist: true,
+    });
     return NextResponse.json({ error: "Webhook processing failed." }, { status: 500 });
   }
+
+  try {
 
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as {
@@ -173,9 +221,15 @@ export async function POST(request: Request) {
           .doc(orderId)
           .set(buildPointer(orderId, orderData), { merge: true });
       }
-      console.log("[stripe:webhook] order_exists_skip", {
+      await logEvent({
+        source: "api/stripe/webhook",
+        eventType: "WEBHOOK_ORDER_EXISTS_SKIP",
+        severity: "info",
+        message: "Order already transitioned; webhook mutation skipped.",
         orderId,
-        eventType,
+        details: {
+          eventType,
+        },
       });
       return NextResponse.json({ received: true });
     }
@@ -261,9 +315,15 @@ export async function POST(request: Request) {
       }),
     ]);
 
-    console.log("[stripe:webhook] order_created", {
+    await logEvent({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_ORDER_CREATED",
+      severity: "info",
+      message: "Order marked paid from checkout.session.completed.",
       orderId,
-      eventType,
+      details: {
+        eventType,
+      },
     });
 
     return NextResponse.json({ received: true });
@@ -308,9 +368,15 @@ export async function POST(request: Request) {
           .doc(orderId)
           .set(buildPointer(orderId, orderData), { merge: true });
       }
-      console.log("[stripe:webhook] order_exists_skip", {
+      await logEvent({
+        source: "api/stripe/webhook",
+        eventType: "WEBHOOK_ORDER_EXISTS_SKIP",
+        severity: "info",
+        message: "Order already transitioned; webhook mutation skipped.",
         orderId,
-        eventType,
+        details: {
+          eventType,
+        },
       });
       return NextResponse.json({ received: true });
     }
@@ -392,9 +458,15 @@ export async function POST(request: Request) {
       }),
     ]);
 
-    console.log("[stripe:webhook] order_created", {
+    await logEvent({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_ORDER_CREATED",
+      severity: "info",
+      message: "Order marked paid from payment_intent.succeeded.",
       orderId,
-      eventType,
+      details: {
+        eventType,
+      },
     });
 
     return NextResponse.json({ received: true });
@@ -440,6 +512,17 @@ export async function POST(request: Request) {
         }
       }
     }
+    await logEvent({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_PAYMENT_FAILED_EVENT",
+      severity: "warning",
+      message: "Processed payment_intent.payment_failed webhook.",
+      orderId: orderId ?? null,
+      details: {
+        eventType,
+      },
+      persist: true,
+    });
     return NextResponse.json({ received: true });
   }
 
@@ -483,8 +566,48 @@ export async function POST(request: Request) {
         }
       }
     }
+    await logEvent({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_PAYMENT_CANCELED_EVENT",
+      severity: "warning",
+      message: "Processed payment_intent.canceled webhook.",
+      orderId: orderId ?? null,
+      details: {
+        eventType,
+      },
+      persist: true,
+    });
     return NextResponse.json({ received: true });
   }
 
+  await logEvent({
+    source: "api/stripe/webhook",
+    eventType: "WEBHOOK_EVENT_IGNORED",
+    severity: "info",
+    message: "Unsupported Stripe webhook event ignored.",
+    orderId: orderIdFromEvent ?? null,
+    details: {
+      eventType,
+      eventId,
+    },
+  });
+
   return NextResponse.json({ received: true });
+  } catch (error) {
+    await logError({
+      source: "api/stripe/webhook",
+      eventType: "WEBHOOK_PROCESSING_FAIL",
+      severity: "critical",
+      message: "Unhandled Stripe webhook processing failure.",
+      error,
+      orderId: orderIdFromEvent ?? null,
+      userId: undefined,
+      details: {
+        eventId,
+        eventType,
+      },
+      persist: true,
+    });
+    return NextResponse.json({ error: "Webhook processing failed." }, { status: 500 });
+  }
 }

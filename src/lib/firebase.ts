@@ -29,10 +29,18 @@ const firebaseConfig = {
     "",
 };
 
-const databaseId =
+const configuredDatabaseId = (
   process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID ??
   process.env.FIREBASE_DATABASE_ID ??
-  "(default)";
+  ""
+).trim();
+
+const databaseId =
+  !configuredDatabaseId ||
+  configuredDatabaseId === "default" ||
+  configuredDatabaseId === "(default)"
+    ? "(default)"
+    : configuredDatabaseId;
 
 const isBrowser = typeof window !== "undefined";
 const app = isBrowser

@@ -76,11 +76,14 @@ export function ShopProductCard({
           prefetch={false}
         >
           {product.image ? (
-            <div
-              className="h-40 w-full bg-cover bg-center transition duration-300 group-hover:scale-[1.02]"
-              style={{ backgroundImage: `url(${product.image})` }}
-              aria-label={product.name}
-            />
+            <div className="h-40 w-full bg-zinc-100">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={product.image}
+                alt={product.name}
+                className="h-full w-full object-contain object-center p-2 transition duration-300 group-hover:scale-[1.02]"
+              />
+            </div>
           ) : (
             <div
               className={`flex h-40 w-full flex-col items-center justify-center gap-2 bg-gradient-to-br ${placeholder.classes}`}
