@@ -66,10 +66,23 @@ function formatPrice(value: number) {
 async function buildHomeSections() {
   const { sections } = await getHomeSectionsConfig();
   const uniqueIds = Array.from(new Set(sections.flatMap((section) => section.productIds)));
-  const products = await Promise.all(
+  const resolvedProducts = await Promise.allSettled(
     uniqueIds.map(async (id) => [id, await getProductById(id)] as const)
   );
-  const productMap = new Map(products);
+  const productMap = new Map<string, Awaited<ReturnType<typeof getProductById>>>();
+
+  for (const result of resolvedProducts) {
+    if (result.status === "fulfilled") {
+      const [id, product] = result.value;
+      productMap.set(id, product);
+      continue;
+    }
+
+    console.error("[home:sections] product lookup failed", {
+      message:
+        result.reason instanceof Error ? result.reason.message : String(result.reason),
+    });
+  }
 
   return sections.map((section) => ({
     ...section,

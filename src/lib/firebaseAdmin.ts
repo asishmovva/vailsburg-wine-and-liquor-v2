@@ -47,7 +47,13 @@ export function adminAuth() {
 }
 
 export function adminDb() {
-  const databaseId = process.env.FIREBASE_DATABASE_ID ?? "(default)";
+  const configuredDatabaseId = (process.env.FIREBASE_DATABASE_ID ?? "").trim();
+  const databaseId =
+    !configuredDatabaseId ||
+    configuredDatabaseId === "default" ||
+    configuredDatabaseId === "(default)"
+      ? "(default)"
+      : configuredDatabaseId;
   return getFirestore(getAdminApp(), databaseId);
 }
 
@@ -58,4 +64,3 @@ export function adminStorageBucket() {
   }
   return getStorage(getAdminApp()).bucket(bucketName);
 }
-
