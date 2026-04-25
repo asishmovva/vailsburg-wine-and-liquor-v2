@@ -147,7 +147,11 @@ function parseCsv(content: string): RawRow[] {
 
 function getDatabaseId() {
   const raw = process.env.FIREBASE_DATABASE_ID;
-  return raw && raw.trim() ? raw.trim() : "(default)";
+  const normalized = raw?.trim();
+  if (!normalized || normalized === "default" || normalized === "(default)") {
+    return "default";
+  }
+  return normalized;
 }
 
 let adminApp: App | null = getApps().length ? getApps()[0] : null;
@@ -375,7 +379,7 @@ async function main() {
     }
   } catch (error) {
     const message = `Firestore lookup failed for database ID "${databaseId}". ` +
-      `Verify FIREBASE_DATABASE_ID matches your Firestore database ID (often "(default)").`;
+      `Verify FIREBASE_DATABASE_ID matches your Firestore database ID (often "default").`;
     throw new Error(message, { cause: error as Error });
   }
 

@@ -14,7 +14,11 @@ function getStorageBucketName() {
 
 export function getDatabaseId() {
   const raw = process.env.FIREBASE_DATABASE_ID;
-  return raw && raw.trim() ? raw.trim() : "(default)";
+  const normalized = raw?.trim();
+  if (!normalized || normalized === "default" || normalized === "(default)") {
+    return "default";
+  }
+  return normalized;
 }
 
 export function getAdminApp() {

@@ -52,7 +52,7 @@ export function adminDb() {
     !configuredDatabaseId ||
     configuredDatabaseId === "default" ||
     configuredDatabaseId === "(default)"
-      ? "(default)"
+      ? "default"
       : configuredDatabaseId;
   return getFirestore(getAdminApp(), databaseId);
 }
