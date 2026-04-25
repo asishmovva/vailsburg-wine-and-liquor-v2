@@ -39,7 +39,7 @@ const databaseId =
   !configuredDatabaseId ||
   configuredDatabaseId === "default" ||
   configuredDatabaseId === "(default)"
-    ? "(default)"
+    ? "default"
     : configuredDatabaseId;
 
 const isBrowser = typeof window !== "undefined";

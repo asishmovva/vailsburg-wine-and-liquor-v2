@@ -134,7 +134,20 @@ export default function CartClient() {
             <Card key={item.productId} className="p-4">
               <div className="grid gap-4 lg:grid-cols-[2fr_1fr_1fr_1fr] lg:items-center">
                 <div className="flex gap-4">
-                  <div className="h-20 w-20 rounded-xl bg-zinc-100" />
+                  <div className="h-20 w-20 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-50">
+                    {item.image ? (
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        className="h-full w-full object-contain p-1"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                        {item.category || "Item"}
+                      </div>
+                    )}
+                  </div>
                   <div>
                     <p className="text-sm font-semibold text-zinc-900">
                       {item.name}
