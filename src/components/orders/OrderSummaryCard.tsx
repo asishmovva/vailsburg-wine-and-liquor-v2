@@ -105,11 +105,14 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
                   className="flex items-center gap-4 border-b border-zinc-100 pb-4 last:border-b-0 last:pb-0"
                 >
                   {item.image ? (
-                    <div
-                      className="h-16 w-16 rounded-xl bg-cover bg-center"
-                      style={{ backgroundImage: `url(${item.image})` }}
-                      aria-label={item.name}
-                    />
+                    <div className="h-16 w-16 overflow-hidden rounded-xl bg-zinc-100">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        className="h-full w-full object-contain object-center p-1"
+                      />
+                    </div>
                   ) : (
                     <div
                       className={`flex h-16 w-16 flex-col items-center justify-center rounded-xl bg-gradient-to-br ${placeholder.classes}`}

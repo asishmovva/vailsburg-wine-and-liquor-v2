@@ -18,8 +18,12 @@ export function useCart() {
   const [state, setState] = useState(getCartState());
 
   useEffect(() => {
+    const sync = () => setState(getCartState());
     initCartStore();
-    return subscribe(() => setState(getCartState()));
+    sync();
+    const unsubscribe = subscribe(sync);
+    sync();
+    return unsubscribe;
   }, []);
 
   const totalQty = getTotalQty(state.items);
