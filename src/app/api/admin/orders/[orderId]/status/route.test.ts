@@ -5,6 +5,8 @@ const adminDbMock = vi.fn();
 const sendOrderNotificationMock = vi.fn();
 const logEventMock = vi.fn();
 const logErrorMock = vi.fn();
+const getStripeMock = vi.fn();
+const paymentIntentRetrieveMock = vi.fn();
 
 vi.mock("@/lib/server/requireAdmin", () => ({
   requireAdmin: requireAdminMock,
@@ -24,6 +26,10 @@ vi.mock("@/lib/ops/logEvent", () => ({
 
 vi.mock("@/lib/ops/logError", () => ({
   logError: logErrorMock,
+}));
+
+vi.mock("@/lib/stripe", () => ({
+  getStripe: getStripeMock,
 }));
 
 const transactionUpdateMock = vi.fn();
@@ -101,6 +107,29 @@ describe("POST /api/admin/orders/[orderId]/status", () => {
     logEventMock.mockResolvedValue(undefined);
     logErrorMock.mockResolvedValue(undefined);
     userOrderSetMock.mockResolvedValue(undefined);
+    getStripeMock.mockReturnValue({
+      paymentIntents: {
+        retrieve: paymentIntentRetrieveMock,
+      },
+    });
+    paymentIntentRetrieveMock.mockResolvedValue({
+      id: "pi_123",
+      amount_received: 4200,
+      currency: "usd",
+      charges: {
+        data: [
+          {
+            id: "ch_123",
+            amount_refunded: 4200,
+            amount_captured: 4200,
+            currency: "usd",
+            refunds: {
+              data: [{ id: "re_123" }],
+            },
+          },
+        ],
+      },
+    });
   });
 
   it("rejects invalid transitions server-side", async () => {
@@ -201,5 +230,103 @@ describe("POST /api/admin/orders/[orderId]/status", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Refund markers are only allowed for paid orders.",
     });
+  });
+
+  it("records stripe-backed refund reconciliation when marked refunded", async () => {
+    currentOrderData = {
+      ...currentOrderData,
+      status: "CANCELLED",
+      paid: true,
+      paidAt: "2026-05-01T12:00:00.000Z",
+      stripe: {
+        paymentIntentId: "pi_123",
+      },
+    };
+
+    const { POST } = await import("@/app/api/admin/orders/[orderId]/status/route");
+    const response = await POST(
+      makeRequest({ refundStatus: "refunded", refundNote: "Processed in Stripe." }) as never,
+      {
+        params: Promise.resolve({ orderId: "order-1" }),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      status: "CANCELLED",
+      refundStatus: "refunded",
+    });
+    expect(paymentIntentRetrieveMock).toHaveBeenCalledWith("pi_123", {
+      expand: ["charges.data.refunds"],
+    });
+    expect(transactionUpdateMock).toHaveBeenCalledWith(
+      orderRef,
+      expect.objectContaining({
+        refundStatus: "refunded",
+        refundReconciliation: expect.objectContaining({
+          state: "stripe_refunded",
+          stripePaymentIntentId: "pi_123",
+          stripeChargeId: "ch_123",
+          stripeAmountRefunded: 42,
+          stripeAmountCaptured: 42,
+          stripeCurrency: "usd",
+          stripeRefundCount: 1,
+          stripeRefundIds: ["re_123"],
+        }),
+      })
+    );
+  });
+
+  it("marks manual-only mismatch when refund is marked without Stripe refund evidence", async () => {
+    currentOrderData = {
+      ...currentOrderData,
+      status: "CANCELLED",
+      paid: true,
+      paidAt: "2026-05-01T12:00:00.000Z",
+      stripe: {
+        paymentIntentId: "pi_456",
+      },
+    };
+    paymentIntentRetrieveMock.mockResolvedValue({
+      id: "pi_456",
+      amount_received: 4200,
+      currency: "usd",
+      charges: {
+        data: [
+          {
+            id: "ch_456",
+            amount_refunded: 0,
+            amount_captured: 4200,
+            currency: "usd",
+            refunds: {
+              data: [],
+            },
+          },
+        ],
+      },
+    });
+
+    const { POST } = await import("@/app/api/admin/orders/[orderId]/status/route");
+    const response = await POST(
+      makeRequest({ refundStatus: "refunded" }) as never,
+      {
+        params: Promise.resolve({ orderId: "order-1" }),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(transactionUpdateMock).toHaveBeenCalledWith(
+      orderRef,
+      expect.objectContaining({
+        refundReconciliation: expect.objectContaining({
+          state: "manual_marked_without_stripe_refund",
+          stripePaymentIntentId: "pi_456",
+          stripeAmountRefunded: 0,
+          stripeAmountCaptured: 42,
+          stripeRefundCount: 0,
+        }),
+      })
+    );
   });
 });

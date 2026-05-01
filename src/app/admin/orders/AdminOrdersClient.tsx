@@ -42,6 +42,7 @@ import type {
   OrderAdminHistoryEntry,
   OrderRecord,
   OrderRefundStatus,
+  RefundReconciliationState,
 } from "@/lib/orders/types";
 import { orderNumberFromId } from "@/utils/order";
 
@@ -205,6 +206,104 @@ function getHistoryLabel(entry: OrderAdminHistoryEntry) {
     default:
       return `Changed status to ${entry.to ?? "updated"}`;
   }
+}
+
+const REFUND_RECONCILIATION_LABELS: Record<
+  RefundReconciliationState,
+  { title: string; toneClass: string; description: string }
+> = {
+  not_checked: {
+    title: "Not checked",
+    toneClass: "bg-zinc-100 text-zinc-700",
+    description: "Stripe reconciliation has not been checked yet.",
+  },
+  not_marked_refunded: {
+    title: "Not marked refunded",
+    toneClass: "bg-zinc-100 text-zinc-700",
+    description: "Refund has not been manually marked in admin yet.",
+  },
+  stripe_refunded: {
+    title: "Stripe refunded",
+    toneClass: "bg-emerald-100 text-emerald-700",
+    description: "Stripe confirms refunded funds for this order.",
+  },
+  manual_marked_without_stripe_refund: {
+    title: "Mismatch: manual only",
+    toneClass: "bg-red-100 text-red-700",
+    description:
+      "Order is marked refunded in admin, but Stripe refund evidence is missing.",
+  },
+  manual_marked_without_payment_intent: {
+    title: "Mismatch: no payment intent",
+    toneClass: "bg-red-100 text-red-700",
+    description:
+      "Order is marked refunded in admin, but no Stripe payment intent is linked.",
+  },
+  stripe_check_failed: {
+    title: "Stripe check failed",
+    toneClass: "bg-amber-100 text-amber-700",
+    description:
+      "Stripe refund reconciliation could not be completed automatically.",
+  },
+};
+
+function formatCentsAsMoney(value?: number | null) {
+  if (typeof value !== "number") return "-";
+  return `$${value.toFixed(2)}`;
+}
+
+function getRefundReconciliationView(
+  order: Pick<OrderRecord, "refundStatus" | "refundReconciliation">
+) {
+  const reconciliation = order.refundReconciliation;
+  if (!reconciliation) {
+    if (order.refundStatus === "refunded") {
+      return {
+        badge: {
+          title: "Mismatch: missing check",
+          toneClass: "bg-red-100 text-red-700",
+        },
+        details: {
+          description:
+            "Order is marked refunded but no reconciliation details are stored.",
+          stripeInfo: null as string | null,
+          amountInfo: null as string | null,
+          errorInfo: null as string | null,
+        },
+      };
+    }
+    return null;
+  }
+
+  const fallback = REFUND_RECONCILIATION_LABELS.not_checked;
+  const label =
+    REFUND_RECONCILIATION_LABELS[reconciliation.state as RefundReconciliationState] ??
+    fallback;
+  const stripeInfo = reconciliation.stripePaymentIntentId
+    ? `PI ${reconciliation.stripePaymentIntentId}`
+    : null;
+  const amountInfo =
+    typeof reconciliation.stripeAmountCaptured === "number" ||
+    typeof reconciliation.stripeAmountRefunded === "number"
+      ? `Refunded ${formatCentsAsMoney(
+          reconciliation.stripeAmountRefunded ?? null
+        )} / Captured ${formatCentsAsMoney(
+          reconciliation.stripeAmountCaptured ?? null
+        )}`
+      : null;
+
+  return {
+    badge: {
+      title: label.title,
+      toneClass: label.toneClass,
+    },
+    details: {
+      description: label.description,
+      stripeInfo,
+      amountInfo,
+      errorInfo: reconciliation.stripeLastError ?? null,
+    },
+  };
 }
 
 export default function AdminOrdersClient() {
@@ -826,6 +925,7 @@ export default function AdminOrdersClient() {
           const requiresNotificationAttention = hasNotificationAttention(order);
           const firstMissedNotificationEvent =
             getFirstMissedNotificationCandidate(order);
+          const refundReconciliationView = getRefundReconciliationView(order);
 
           return (
             <Card
@@ -868,6 +968,13 @@ export default function AdminOrdersClient() {
                     {order.refundStatus ? (
                       <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700">
                         Refund: {order.refundStatus.replace("_", " ")}
+                      </span>
+                    ) : null}
+                    {refundReconciliationView ? (
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${refundReconciliationView.badge.toneClass}`}
+                      >
+                        {refundReconciliationView.badge.title}
                       </span>
                     ) : null}
                     {hasNotificationFailures ? (
@@ -996,6 +1103,29 @@ export default function AdminOrdersClient() {
                   <p className="text-red-600">Cancel reason: {order.cancellationReason}</p>
                 ) : null}
                 {order.refundNote ? <p>Refund note: {order.refundNote}</p> : null}
+                {refundReconciliationView ? (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-800">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Refund reconciliation
+                    </p>
+                    <p className="text-sm">{refundReconciliationView.details.description}</p>
+                    {refundReconciliationView.details.stripeInfo ? (
+                      <p className="text-xs text-zinc-600">
+                        Stripe: {refundReconciliationView.details.stripeInfo}
+                      </p>
+                    ) : null}
+                    {refundReconciliationView.details.amountInfo ? (
+                      <p className="text-xs text-zinc-600">
+                        {refundReconciliationView.details.amountInfo}
+                      </p>
+                    ) : null}
+                    {refundReconciliationView.details.errorInfo ? (
+                      <p className="text-xs font-medium text-red-600">
+                        Stripe error: {refundReconciliationView.details.errorInfo}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
                 {firstMissedNotificationEvent ? (
                   <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
                     <p className="text-xs font-semibold uppercase tracking-wide">
