@@ -40,6 +40,7 @@ import {
 } from "@/lib/orders/adminStatusTransitions";
 import type {
   OrderAdminHistoryEntry,
+  OrderHandoffVerification,
   OrderRecord,
   OrderRefundStatus,
   RefundReconciliationState,
@@ -322,6 +323,13 @@ function getHandoffVerificationBadge(
     };
   }
 
+  if (order.fulfillment === "delivery" && !verification.signatureCollected) {
+    return {
+      label: "Signature pending",
+      className: "bg-amber-100 text-amber-700",
+    };
+  }
+
   if (order.fulfillment === "delivery" && verification.signatureCollected) {
     return {
       label: "ID + signature verified",
@@ -337,6 +345,35 @@ function getHandoffVerificationBadge(
 
 function requiresAlcoholHandoffVerification(order: Pick<OrderRecord, "ageVerified" | "fulfillment">) {
   return order.ageVerified === true || order.fulfillment === "delivery";
+}
+
+function buildHandoffVerificationPayload(
+  order: Pick<OrderRecord, "handoffVerification" | "fulfillment">,
+  updates: Partial<OrderHandoffVerification>,
+  fallbackNote: string
+) {
+  return {
+    idChecked: updates.idChecked ?? order.handoffVerification?.idChecked ?? false,
+    signatureCollected:
+      updates.signatureCollected ??
+      order.handoffVerification?.signatureCollected ??
+      false,
+    note:
+      updates.note ??
+      order.handoffVerification?.note ??
+      fallbackNote,
+  };
+}
+
+function getHandoffVerificationWarning(order: Pick<OrderRecord, "handoffVerification" | "fulfillment" | "ageVerified">) {
+  if (!requiresAlcoholHandoffVerification(order)) return null;
+  if (!order.handoffVerification?.idChecked) {
+    return "ID check is still pending. Verify it before completing this order.";
+  }
+  if (order.fulfillment === "delivery" && !order.handoffVerification?.signatureCollected) {
+    return "Signature has not been collected yet for this delivery handoff.";
+  }
+  return null;
 }
 
 export default function AdminOrdersClient() {
@@ -982,6 +1019,17 @@ export default function AdminOrdersClient() {
           const firstMissedNotificationEvent =
             getFirstMissedNotificationCandidate(order);
           const refundReconciliationView = getRefundReconciliationView(order);
+          const handoffVerification = order.handoffVerification;
+          const handoffWarning = getHandoffVerificationWarning(order);
+          const handoffVerifiedBy =
+            handoffVerification?.verifiedByEmail ??
+            handoffVerification?.verifiedByUid ??
+            null;
+          const handoffVerifiedAt = handoffVerification?.verifiedAt;
+          const completionBlockedByHandoff =
+            primaryAction?.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED &&
+            requiresAlcoholHandoffVerification(order) &&
+            !handoffVerification?.idChecked;
 
           return (
             <Card
@@ -991,6 +1039,12 @@ export default function AdminOrdersClient() {
               } cursor-pointer sm:cursor-default print:cursor-default print:border-0 print:p-0 print:shadow-none print:ring-0`}
               onClick={(event) => handleCardToggle(event, order.id)}
             >
+              <div className="hidden border-b border-zinc-200 pb-4 print:block">
+                <p className="text-lg font-semibold text-zinc-900">
+                  Vailsburg Wine & Liquor
+                </p>
+                <p className="text-sm text-zinc-500">Order fulfillment sheet</p>
+              </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
@@ -1028,7 +1082,7 @@ export default function AdminOrdersClient() {
                     ) : null}
                     {refundReconciliationView ? (
                       <span
-                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${refundReconciliationView.badge.toneClass}`}
+                        className={`rounded-full px-2.5 py-1 text-xs font-semibold print:hidden ${refundReconciliationView.badge.toneClass}`}
                       >
                         {refundReconciliationView.badge.title}
                       </span>
@@ -1041,11 +1095,11 @@ export default function AdminOrdersClient() {
                       </span>
                     ) : null}
                     {hasNotificationFailures ? (
-                      <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+                      <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700 print:hidden">
                         Notification failed
                       </span>
                     ) : requiresNotificationAttention ? (
-                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700 print:hidden">
                         Notification attention
                       </span>
                     ) : null}
@@ -1160,27 +1214,129 @@ export default function AdminOrdersClient() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                       Handoff verification
                     </p>
-                    <p className="text-sm">
-                      ID check:{" "}
-                      {order.handoffVerification?.idChecked ? "verified" : "pending"}
-                    </p>
-                    {order.fulfillment === "delivery" ? (
-                      <p className="text-sm">
-                        Signature:{" "}
-                        {order.handoffVerification?.signatureCollected
-                          ? "captured"
-                          : "not captured"}
+                    <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
+                      <p>
+                        ID checked:{" "}
+                        <span className="font-medium text-zinc-900">
+                          {handoffVerification?.idChecked ? "Yes" : "No"}
+                        </span>
+                      </p>
+                      <p>
+                        Signature collected:{" "}
+                        <span className="font-medium text-zinc-900">
+                          {order.fulfillment === "delivery"
+                            ? handoffVerification?.signatureCollected
+                              ? "Yes"
+                              : "No"
+                            : "Not required"}
+                        </span>
+                      </p>
+                      <p>
+                        Verified by:{" "}
+                        <span className="font-medium text-zinc-900">
+                          {handoffVerifiedBy ?? "Not recorded"}
+                        </span>
+                      </p>
+                      <p>
+                        Verified at:{" "}
+                        <span className="font-medium text-zinc-900">
+                          {handoffVerifiedAt
+                            ? formatDateTime(handoffVerifiedAt)
+                            : "Not recorded"}
+                        </span>
+                      </p>
+                    </div>
+                    {handoffVerification?.note ? (
+                      <p className="mt-2 text-xs text-zinc-600">
+                        Note: {handoffVerification.note}
                       </p>
                     ) : null}
-                    {order.handoffVerification?.note ? (
-                      <p className="text-xs text-zinc-600">
-                        Note: {order.handoffVerification.note}
+                    {handoffWarning ? (
+                      <p className="mt-2 text-xs font-medium text-amber-700">
+                        {handoffWarning}
                       </p>
                     ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2 print:hidden">
+                      {!handoffVerification?.idChecked ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            void handleHandoffVerificationAction(
+                              order,
+                              buildHandoffVerificationPayload(
+                                order,
+                                { idChecked: true },
+                                order.fulfillment === "delivery"
+                                  ? "ID checked at delivery handoff."
+                                  : "ID checked at pickup handoff."
+                              ),
+                              "ID checked"
+                            )
+                          }
+                          disabled={updatingId === order.id}
+                        >
+                          Mark ID checked
+                        </Button>
+                      ) : null}
+                      {order.fulfillment === "delivery" &&
+                      handoffVerification?.idChecked &&
+                      !handoffVerification?.signatureCollected ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            void handleHandoffVerificationAction(
+                              order,
+                              buildHandoffVerificationPayload(
+                                order,
+                                {
+                                  idChecked: true,
+                                  signatureCollected: true,
+                                },
+                                "Signature collected at delivery handoff."
+                              ),
+                              "Signature collected"
+                            )
+                          }
+                          disabled={updatingId === order.id}
+                        >
+                          Mark signature collected
+                        </Button>
+                      ) : null}
+                      {order.fulfillment === "delivery" &&
+                      (!handoffVerification?.idChecked ||
+                        !handoffVerification?.signatureCollected) ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            void handleHandoffVerificationAction(
+                              order,
+                              buildHandoffVerificationPayload(
+                                order,
+                                {
+                                  idChecked: true,
+                                  signatureCollected:
+                                    order.fulfillment === "delivery",
+                                },
+                                order.fulfillment === "delivery"
+                                  ? "ID checked and signature captured at delivery."
+                                  : "ID checked at pickup handoff."
+                              ),
+                              "Handoff verification completed"
+                            )
+                          }
+                          disabled={updatingId === order.id}
+                        >
+                          Complete handoff verification
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
                 {order.notifications?.emailLastError || order.alerts?.emailLastError ? (
-                  <p className="font-medium text-red-600">
+                  <p className="font-medium text-red-600 print:hidden">
                     Notification issue:{" "}
                     {order.notifications?.emailLastError ??
                       order.alerts?.emailLastError}
@@ -1191,7 +1347,7 @@ export default function AdminOrdersClient() {
                 ) : null}
                 {order.refundNote ? <p>Refund note: {order.refundNote}</p> : null}
                 {refundReconciliationView ? (
-                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-800">
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-800 print:hidden">
                     <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                       Refund reconciliation
                     </p>
@@ -1214,7 +1370,7 @@ export default function AdminOrdersClient() {
                   </div>
                 ) : null}
                 {firstMissedNotificationEvent ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 print:hidden">
                     <p className="text-xs font-semibold uppercase tracking-wide">
                       Recovery suggested
                     </p>
@@ -1247,7 +1403,7 @@ export default function AdminOrdersClient() {
               </div>
 
               {historyEntries.length > 0 ? (
-                <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2`}>
+                <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2 print:hidden`}>
                   <p className="text-sm font-semibold text-zinc-900">Audit trail</p>
                   <div className="space-y-2 text-xs text-zinc-600">
                     {historyEntries.map((entry, index) => (
@@ -1268,7 +1424,7 @@ export default function AdminOrdersClient() {
                 </div>
               ) : null}
 
-              <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2`}>
+              <div className={`${showItems ? "block" : "hidden sm:block"} space-y-2 print:hidden`}>
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-semibold text-zinc-900">
                     Notifications
@@ -1347,12 +1503,15 @@ export default function AdminOrdersClient() {
                 {primaryAction ? (
                   <Button
                     onClick={() => void handlePrimaryAction(order)}
-                    disabled={updatingId === order.id}
+                    disabled={updatingId === order.id || completionBlockedByHandoff}
                   >
-                    {isPendingConfirmation === pendingStatusKey &&
-                    primaryAction.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED
-                      ? "Confirm completed"
-                      : primaryAction.label}
+                    {completionBlockedByHandoff
+                      ? "Verify ID before completing"
+                      : isPendingConfirmation === pendingStatusKey &&
+                          primaryAction.nextStatus ===
+                            ADMIN_ORDER_STATUSES.COMPLETED
+                        ? "Confirm completed"
+                        : primaryAction.label}
                   </Button>
                 ) : null}
 
@@ -1368,34 +1527,6 @@ export default function AdminOrdersClient() {
                     disabled={updatingId === order.id}
                   >
                     Cancel order
-                  </Button>
-                ) : null}
-
-                {requiresAlcoholHandoffVerification(order) &&
-                !order.handoffVerification?.idChecked ? (
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      void handleHandoffVerificationAction(
-                        order,
-                        {
-                          idChecked: true,
-                          signatureCollected: order.fulfillment === "delivery",
-                          note:
-                            order.fulfillment === "delivery"
-                              ? "ID checked and signature captured at delivery."
-                              : "ID checked at pickup handoff.",
-                        },
-                        order.fulfillment === "delivery"
-                          ? "ID + signature verified"
-                          : "ID verified"
-                      )
-                    }
-                    disabled={updatingId === order.id}
-                  >
-                    {order.fulfillment === "delivery"
-                      ? "Mark ID + signature"
-                      : "Mark ID verified"}
                   </Button>
                 ) : null}
 
@@ -1432,6 +1563,13 @@ export default function AdminOrdersClient() {
         const refundActions = getRefundActions(activeMobileOrder);
         const requiresHandoff = requiresAlcoholHandoffVerification(activeMobileOrder);
         const handoffPending = !activeMobileOrder.handoffVerification?.idChecked;
+        const handoffSignaturePending =
+          activeMobileOrder.fulfillment === "delivery" &&
+          !activeMobileOrder.handoffVerification?.signatureCollected;
+        const completionBlockedByHandoff =
+          primaryAction?.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED &&
+          requiresHandoff &&
+          !activeMobileOrder.handoffVerification?.idChecked;
         const normalizedStatus = getNormalizedStatus(activeMobileOrder);
         const pendingStatusKey = primaryAction
           ? `status:${primaryAction.nextStatus}`
@@ -1459,13 +1597,18 @@ export default function AdminOrdersClient() {
               {primaryAction ? (
                 <Button
                   onClick={() => void handlePrimaryAction(activeMobileOrder)}
-                  disabled={updatingId === activeMobileOrder.id}
+                  disabled={
+                    updatingId === activeMobileOrder.id || completionBlockedByHandoff
+                  }
                 >
-                  {pendingAction?.orderId === activeMobileOrder.id &&
-                  pendingAction.action === pendingStatusKey &&
-                  primaryAction.nextStatus === ADMIN_ORDER_STATUSES.COMPLETED
-                    ? "Tap again to confirm"
-                    : primaryAction.label}
+                  {completionBlockedByHandoff
+                    ? "Verify ID before completing"
+                    : pendingAction?.orderId === activeMobileOrder.id &&
+                        pendingAction.action === pendingStatusKey &&
+                        primaryAction.nextStatus ===
+                          ADMIN_ORDER_STATUSES.COMPLETED
+                      ? "Tap again to confirm"
+                      : primaryAction.label}
                 </Button>
               ) : null}
 
@@ -1491,25 +1634,52 @@ export default function AdminOrdersClient() {
                     onClick={() =>
                       void handleHandoffVerificationAction(
                         activeMobileOrder,
-                        {
-                          idChecked: true,
-                          signatureCollected:
-                            activeMobileOrder.fulfillment === "delivery",
-                          note:
-                            activeMobileOrder.fulfillment === "delivery"
-                              ? "ID checked and signature captured at delivery."
-                              : "ID checked at pickup handoff.",
-                        },
+                        buildHandoffVerificationPayload(
+                          activeMobileOrder,
+                          {
+                            idChecked: true,
+                            signatureCollected:
+                              activeMobileOrder.fulfillment === "delivery",
+                          },
+                          activeMobileOrder.fulfillment === "delivery"
+                            ? "ID checked and signature captured at delivery."
+                            : "ID checked at pickup handoff."
+                        ),
                         activeMobileOrder.fulfillment === "delivery"
-                          ? "ID + signature verified"
-                          : "ID verified"
+                          ? "Complete handoff verification"
+                          : "ID checked"
                       )
                     }
                     disabled={updatingId === activeMobileOrder.id}
                   >
                     {activeMobileOrder.fulfillment === "delivery"
-                      ? "ID + sign"
-                      : "ID verified"}
+                      ? "Complete handoff"
+                      : "Mark ID checked"}
+                  </Button>
+                ) : null}
+
+                {requiresHandoff &&
+                !handoffPending &&
+                handoffSignaturePending ? (
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      void handleHandoffVerificationAction(
+                        activeMobileOrder,
+                        buildHandoffVerificationPayload(
+                          activeMobileOrder,
+                          {
+                            idChecked: true,
+                            signatureCollected: true,
+                          },
+                          "Signature collected at delivery handoff."
+                        ),
+                        "Signature collected"
+                      )
+                    }
+                    disabled={updatingId === activeMobileOrder.id}
+                  >
+                    Mark signature
                   </Button>
                 ) : null}
 
