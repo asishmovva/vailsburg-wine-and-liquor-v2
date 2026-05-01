@@ -4,6 +4,7 @@ import {
   ADMIN_ORDER_STATUSES,
   getAdminStatusQueryValues,
 } from "@/lib/orders/adminStatusTransitions";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 
 export const runtime = "nodejs";
@@ -18,8 +19,10 @@ function getCreatedAtSeconds(value?: unknown) {
 }
 
 export async function GET(req: NextRequest) {
-  const { error } = await requireAdmin(req);
-  if (error) return error;
+  const admin = await requireAdmin(req);
+  if (admin.error) return admin.error;
+  const limited = adminRateLimit("read", admin.uid, req);
+  if (limited) return limited;
 
   const { searchParams } = new URL(req.url);
   const status = searchParams.get("status") ?? ADMIN_ORDER_STATUSES.PENDING_STORE;

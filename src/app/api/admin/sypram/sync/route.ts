@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 import { getSypramSyncOverview, syncSypramToFirestore } from "@/lib/sypram/sync";
 
@@ -10,6 +11,8 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin(request);
   if (admin.error) return admin.error;
+  const limited = adminRateLimit("read", admin.uid, request);
+  if (limited) return limited;
 
   try {
     const overview = await getSypramSyncOverview();
@@ -31,6 +34,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const admin = await requireAdmin(request);
   if (admin.error) return admin.error;
+  const limited = adminRateLimit("heavy", admin.uid, request);
+  if (limited) return limited;
 
   let dryRun = false;
   try {

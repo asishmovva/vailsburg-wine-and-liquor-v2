@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/server/requireAdmin";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { getHomeSectionsConfig, saveHomeSectionsConfig } from "@/lib/homeSections";
 
 export const runtime = "nodejs";
@@ -10,8 +11,10 @@ type UpdateBody = {
 };
 
 export async function GET(request: NextRequest) {
-  const { error } = await requireAdmin(request);
+  const { uid, error } = await requireAdmin(request);
   if (error) return error;
+  const limited = adminRateLimit("read", uid, request);
+  if (limited) return limited;
 
   const data = await getHomeSectionsConfig();
   return NextResponse.json(data);
@@ -20,6 +23,8 @@ export async function GET(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   const { uid, error } = await requireAdmin(request);
   if (error) return error;
+  const limited = adminRateLimit("mutate", uid, request);
+  if (limited) return limited;
 
   let body: UpdateBody = {};
   try {

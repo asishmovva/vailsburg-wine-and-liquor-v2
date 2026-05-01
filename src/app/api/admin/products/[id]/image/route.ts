@@ -3,6 +3,7 @@ import sharp from "sharp";
 import { FieldValue } from "firebase-admin/firestore";
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb, adminStorageBucket } from "@/lib/firebaseAdmin";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 
 export const runtime = "nodejs";
@@ -26,6 +27,8 @@ export async function POST(
 ) {
   const { uid, error } = await requireAdmin(request);
   if (error) return error;
+  const limited = adminRateLimit("mutate", uid, request);
+  if (limited) return limited;
 
   const { id } = await context.params;
   const productId = validateProductId(id);
@@ -98,8 +101,10 @@ export async function DELETE(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  const { error } = await requireAdmin(request);
+  const { uid, error } = await requireAdmin(request);
   if (error) return error;
+  const limited = adminRateLimit("mutate", uid, request);
+  if (limited) return limited;
 
   const { id } = await context.params;
   const productId = validateProductId(id);

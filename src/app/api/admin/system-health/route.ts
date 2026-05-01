@@ -7,6 +7,7 @@ import {
 } from "@/lib/orders/adminStatusTransitions";
 import { logError } from "@/lib/ops/logError";
 import { getOrderStaleState } from "@/lib/ops/staleOrders";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 
 export const runtime = "nodejs";
@@ -49,6 +50,8 @@ function toIso(value?: unknown) {
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin(request);
   if (admin.error) return admin.error;
+  const limited = adminRateLimit("read", admin.uid, request);
+  if (limited) return limited;
 
   const db = adminDb();
   const nowMs = Date.now();

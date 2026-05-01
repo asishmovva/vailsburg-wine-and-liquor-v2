@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { buildReviewPageData } from "@/lib/image-review/server";
 import { requireAdmin } from "@/lib/server/requireAdmin";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,8 +13,10 @@ function parseOptionalNumber(value: string | null) {
 }
 
 export async function GET(req: NextRequest) {
-  const { error } = await requireAdmin(req);
-  if (error) return error;
+  const admin = await requireAdmin(req);
+  if (admin.error) return admin.error;
+  const limited = adminRateLimit("read", admin.uid, req);
+  if (limited) return limited;
 
   const { searchParams } = new URL(req.url);
   const page = Math.max(1, Number.parseInt(searchParams.get("page") ?? "1", 10) || 1);
