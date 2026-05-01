@@ -7,6 +7,7 @@ const getStripeMock = vi.fn();
 const resolveProductImageMock = vi.fn();
 const logEventMock = vi.fn();
 const logErrorMock = vi.fn();
+const getFulfillmentAvailabilityMock = vi.fn();
 
 vi.mock("@/lib/firebaseAdmin", () => ({
   adminAuth: adminAuthMock,
@@ -29,7 +30,12 @@ vi.mock("@/lib/ops/logError", () => ({
   logError: logErrorMock,
 }));
 
+vi.mock("@/lib/checkout/storeAvailability", () => ({
+  getFulfillmentAvailability: getFulfillmentAvailabilityMock,
+}));
+
 const existingAttemptGetMock = vi.fn();
+const cleanupReservationsGetMock = vi.fn();
 const paymentIntentRetrieveMock = vi.fn();
 
 const dbInstance = {
@@ -39,13 +45,25 @@ const dbInstance = {
     }
 
     return {
-      where: vi.fn(() => ({
-        where: vi.fn(() => ({
-          limit: vi.fn(() => ({
-            get: existingAttemptGetMock,
-          })),
-        })),
-      })),
+      where: vi.fn((field: string) => {
+        if (field === "inventoryReservationActive") {
+          return {
+            limit: vi.fn(() => ({
+              get: cleanupReservationsGetMock,
+            })),
+          };
+        }
+        if (field === "userId") {
+          return {
+            where: vi.fn(() => ({
+              limit: vi.fn(() => ({
+                get: existingAttemptGetMock,
+              })),
+            })),
+          };
+        }
+        throw new Error(`Unexpected orders.where field: ${field}`);
+      }),
     };
   }),
 };
@@ -81,6 +99,10 @@ describe("POST /api/stripe/create-intent", () => {
       empty: true,
       docs: [],
     });
+    cleanupReservationsGetMock.mockResolvedValue({
+      empty: true,
+      docs: [],
+    });
     paymentIntentRetrieveMock.mockResolvedValue({
       id: "pi_123",
       status: "requires_payment_method",
@@ -88,6 +110,12 @@ describe("POST /api/stripe/create-intent", () => {
     });
     logEventMock.mockResolvedValue(undefined);
     logErrorMock.mockResolvedValue(undefined);
+    getFulfillmentAvailabilityMock.mockReturnValue({
+      isOpen: true,
+      message: null,
+      label: "9 AM - 9 PM",
+      timeZone: "America/New_York",
+    });
   });
 
   it("rejects an empty cart before any auth or Stripe work", async () => {
