@@ -6,7 +6,6 @@ import { logEvent } from "@/lib/ops/logEvent";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import {
   buildRefundReconciliation,
-  normalizeStripeChargeCurrency,
   type StripePaymentIntentLike,
 } from "@/lib/orders/refundReconciliation";
 import {
@@ -76,6 +75,23 @@ type OrderData = {
   stripe?: { paymentIntentId?: string | null } | null;
 };
 
+type StripePaymentIntentWithExpandedCharges = {
+  id: string;
+  amount_received: number;
+  currency: string;
+  charges?: {
+    data?: Array<{
+      id: string;
+      amount_refunded: number;
+      amount_captured?: number | null;
+      currency?: string | null;
+      refunds?: {
+        data?: Array<{ id?: string | null }>;
+      } | null;
+    }>;
+  } | null;
+};
+
 function isPaidOrder(order: OrderData) {
   return Boolean(order.paidAt || order.paid);
 }
@@ -142,6 +158,7 @@ export async function POST(
 
   const db = adminDb();
   const orderRef = db.collection("orders").doc(orderId);
+  const stripe = getStripe();
 
   let updatedOrder: OrderData | null = null;
 
@@ -229,15 +246,17 @@ export async function POST(
           const stripePaymentIntentId = orderData.stripe?.paymentIntentId ?? null;
           if (stripePaymentIntentId) {
             try {
-              const stripe = getStripe();
-              const retrieved = await stripe.paymentIntents.retrieve(stripePaymentIntentId, {
-                expand: ["charges.data.refunds"],
-              });
+              const retrieved = (await stripe.paymentIntents.retrieve(
+                stripePaymentIntentId,
+                {
+                  expand: ["charges.data.refunds"],
+                }
+              )) as unknown as StripePaymentIntentWithExpandedCharges;
               const latestCharge = retrieved.charges?.data?.[0];
               paymentIntent = {
                 id: retrieved.id,
                 amount_received: retrieved.amount_received,
-                currency: normalizeStripeChargeCurrency(retrieved.currency),
+                currency: retrieved.currency?.toString().toLowerCase() ?? null,
                 latest_charge: latestCharge
                   ? {
                       id: latestCharge.id,
@@ -246,7 +265,7 @@ export async function POST(
                         typeof latestCharge.amount_captured === "number"
                           ? latestCharge.amount_captured
                           : retrieved.amount_received,
-                      currency: normalizeStripeChargeCurrency(latestCharge.currency),
+                      currency: latestCharge.currency?.toString().toLowerCase() ?? null,
                       refunds: {
                         data: (latestCharge.refunds?.data ?? []).map((refund) => ({
                           id: refund.id,

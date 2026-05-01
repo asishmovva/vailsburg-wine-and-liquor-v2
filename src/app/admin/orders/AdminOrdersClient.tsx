@@ -40,7 +40,6 @@ import {
 } from "@/lib/orders/adminStatusTransitions";
 import type {
   OrderAdminHistoryEntry,
-  OrderRefundReconciliation,
   OrderRecord,
   OrderRefundStatus,
   RefundReconciliationState,
