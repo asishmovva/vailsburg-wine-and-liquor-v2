@@ -9,12 +9,13 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
+import {
+  DELIVERY_FEE,
+  DELIVERY_RADIUS_MILES,
+  MIN_DELIVERY_ORDER,
+} from "@/lib/checkout/guardrails";
 import { db } from "@/lib/firebase";
 import { calcTotals } from "@/utils/calcTotals";
-
-const DELIVERY_FEE = 5.99;
-const MIN_DELIVERY_ORDER = 20;
-const DELIVERY_RADIUS_MILES = 8;
 const ADDRESS_DEBOUNCE_MS = 400;
 const PREFS_STORAGE_KEY = "vailsburg_checkout_prefs_v1";
 

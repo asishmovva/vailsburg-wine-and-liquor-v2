@@ -1,5 +1,15 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
+import {
+  computeCheckoutTotalCents,
+  computeManualTaxCents,
+  DELIVERY_FEE,
+  hasPriceMismatch,
+  isWithinDeliveryRadius,
+  meetsDeliveryMinimum,
+  MIN_DELIVERY_ORDER,
+  TAX_RATE,
+} from "@/lib/checkout/guardrails";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
@@ -10,10 +20,6 @@ import { resolveProductImage } from "@/services/productImage";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DELIVERY_RADIUS_MILES = 8;
-const DELIVERY_FEE = 5.99;
-const MIN_DELIVERY_ORDER = 20;
-const TAX_RATE = 0.06625;
 const USE_STRIPE_TAX = process.env.USE_STRIPE_TAX === "true";
 
 type CartInputItem = {
@@ -490,11 +496,7 @@ export async function POST(request: Request) {
       }
 
       const price = parseNumber(data.price);
-      if (
-        Number.isFinite(expectedPrice) &&
-        expectedPrice > 0 &&
-        Math.round(expectedPrice * 100) !== Math.round(price * 100)
-      ) {
+      if (hasPriceMismatch(expectedPrice, price)) {
         priceChangedItems.push(name);
         continue;
       }
@@ -618,7 +620,7 @@ export async function POST(request: Request) {
         );
       }
 
-      if (distanceMiles > DELIVERY_RADIUS_MILES) {
+      if (!isWithinDeliveryRadius(distanceMiles)) {
         return validationResponse(
           400,
           "Delivery address is outside our delivery area",
@@ -630,7 +632,7 @@ export async function POST(request: Request) {
         );
       }
 
-      if (subtotal < MIN_DELIVERY_ORDER) {
+      if (!meetsDeliveryMinimum(subtotal)) {
         return validationResponse(
           400,
           `Delivery orders must be at least $${MIN_DELIVERY_ORDER.toFixed(2)} before tax and tip.`,
@@ -682,7 +684,7 @@ export async function POST(request: Request) {
         taxRate =
           taxableSubtotalCents > 0 ? taxCents / taxableSubtotalCents : TAX_RATE;
       } else {
-        taxCents = Math.round(taxableSubtotalCents * TAX_RATE);
+        taxCents = computeManualTaxCents(taxableSubtotalCents);
       }
     } catch (error) {
       await logError({
@@ -703,11 +705,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const totalCents =
-      subtotalCents +
-      Math.round(deliveryFee * 100) +
-      Math.round(tipAmount * 100) +
-      taxCents;
+    const totalCents = computeCheckoutTotalCents({
+      subtotalCents,
+      fulfillment,
+      deliveryFee,
+      tipAmount,
+      taxCents,
+    });
 
     const stripe = getStripe();
     const orderRef = db.collection("orders").doc();

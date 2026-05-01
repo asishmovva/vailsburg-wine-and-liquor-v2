@@ -255,7 +255,7 @@ function OrdersContent() {
                   fulfillment={order.fulfillment ?? "pickup"}
                 />
                 <span className="text-xs text-zinc-500 capitalize">
-                  {normalizedStatus === "out_for_delivery"
+                  {normalizedStatus === "OUT_FOR_DELIVERY"
                     ? "Delivery update"
                     : order.fulfillment ?? "pickup"}
                 </span>

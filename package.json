@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "seed:dry": "ts-node scripts/seedProductsFromCsv.ts --dry-run",
     "seed:products": "ts-node scripts/seedProductsFromCsv.ts",
     "backfill:name-lower:dry": "ts-node scripts/backfillNameLower.ts --dry-run",
@@ -40,7 +42,8 @@
     "eslint-config-next": "16.1.4",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.5"
   },
   "ts-node": {
     "compilerOptions": {
