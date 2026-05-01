@@ -11,6 +11,7 @@ import type { OrderNotifications } from "@/lib/orders/types";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import { getStripe } from "@/lib/stripe";
 import { FINAL_ORDER_STATUSES, ORDER_STATUSES } from "@/lib/orders/status";
+import { getClientKey, rateLimit } from "@/lib/server/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,6 +82,24 @@ function isFinalStatus(status?: string) {
 }
 
 export async function GET(request: Request) {
+  const verifyRateLimited = rateLimit(
+    `orders-verify:${getClientKey(request)}`,
+    request,
+    {
+      limit: 20,
+      windowMs: 60_000,
+    }
+  );
+  if (verifyRateLimited) {
+    return NextResponse.json(
+      {
+        error: "Too many verification attempts. Please wait a moment and try again.",
+        code: "rate_limited",
+      },
+      { status: 429 }
+    );
+  }
+
   const { searchParams } = new URL(request.url);
   const orderId = searchParams.get("orderId") ?? "";
 

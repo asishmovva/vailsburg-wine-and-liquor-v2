@@ -6,6 +6,7 @@ import {
 } from "@/lib/notifications/events";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import { requireAdmin } from "@/lib/server/requireAdmin";
+import { rateLimit } from "@/lib/server/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,21 @@ export async function POST(
 ) {
   const admin = await requireAdmin(request);
   if (admin.error) return admin.error;
+
+  const resendRateLimited = rateLimit(
+    `admin-order-notification-resend:${admin.uid}`,
+    request,
+    {
+      limit: 30,
+      windowMs: 60_000,
+    }
+  );
+  if (resendRateLimited) {
+    return NextResponse.json(
+      { error: "Too many resend attempts. Please wait before trying again." },
+      { status: 429 }
+    );
+  }
 
   const { orderId } = await context.params;
   if (!orderId) {

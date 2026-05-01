@@ -22,6 +22,7 @@ import { getFulfillmentAvailability } from "@/lib/checkout/storeAvailability";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
+import { getClientKey, rateLimit } from "@/lib/server/rateLimit";
 import { getStripe } from "@/lib/stripe";
 import { ORDER_STATUSES } from "@/lib/orders/status";
 import { resolveProductImage } from "@/services/productImage";
@@ -522,6 +523,24 @@ async function cleanupExpiredCheckoutReservations() {
 
 export async function POST(request: Request) {
   try {
+    const createIntentRateLimited = rateLimit(
+      `checkout-create-intent:${getClientKey(request)}`,
+      request,
+      {
+        limit: 12,
+        windowMs: 60_000,
+      }
+    );
+    if (createIntentRateLimited) {
+      return NextResponse.json(
+        {
+          error: "Too many checkout attempts. Please wait a moment and try again.",
+          code: "rate_limited",
+        },
+        { status: 429 }
+      );
+    }
+
     const payload = (await request.json()) as CreateIntentPayload;
     const items = payload.items ?? [];
     if (!Array.isArray(items) || items.length === 0) {
