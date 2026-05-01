@@ -104,11 +104,25 @@ export type OrderRefundReconciliation = {
   stripeLastError?: string | null;
 };
 
+export type OrderHandoffVerification = {
+  idChecked: boolean;
+  signatureCollected?: boolean;
+  note?: string | null;
+  verifiedAt?: unknown;
+  verifiedByUid?: string | null;
+  verifiedByEmail?: string | null;
+};
+
 export type OrderAdminHistoryEntry = {
   at?: unknown;
   actorUid: string;
   actorEmail?: string | null;
-  action: "status_change" | "cancel" | "refund_marked" | "note_added";
+  action:
+    | "status_change"
+    | "cancel"
+    | "refund_marked"
+    | "note_added"
+    | "handoff_verified";
   from?: string | null;
   to?: string | null;
   reason?: string | null;
@@ -157,6 +171,7 @@ export type OrderRecord = {
   refundNote?: string | null;
   refundedAt?: unknown;
   refundReconciliation?: OrderRefundReconciliation | null;
+  handoffVerification?: OrderHandoffVerification | null;
   adminHistory?: OrderAdminHistoryEntry[] | null;
   paid?: boolean;
   pos?: {

@@ -209,6 +209,84 @@ describe("POST /api/admin/orders/[orderId]/status", () => {
     expect(userOrderSetMock).toHaveBeenCalled();
   });
 
+  it("requires ID verification before completing an alcohol handoff order", async () => {
+    currentOrderData = {
+      ...currentOrderData,
+      status: "READY_FOR_PICKUP",
+      fulfillment: "pickup",
+      ageVerified: true,
+      handoffVerification: {
+        idChecked: false,
+      },
+    };
+
+    const { POST } = await import("@/app/api/admin/orders/[orderId]/status/route");
+
+    const response = await POST(
+      makeRequest({ status: "COMPLETED" }) as never,
+      {
+        params: Promise.resolve({ orderId: "order-1" }),
+      }
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "ID verification must be marked before completing this order.",
+    });
+    expect(transactionUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("stores handoff verification and supports legacy alcoholHandoff payload shape", async () => {
+    currentOrderData = {
+      ...currentOrderData,
+      status: "READY_FOR_PICKUP",
+      fulfillment: "delivery",
+      ageVerified: true,
+      handoffVerification: null,
+    };
+
+    const { POST } = await import("@/app/api/admin/orders/[orderId]/status/route");
+
+    const response = await POST(
+      makeRequest({
+        alcoholHandoff: {
+          idChecked: true,
+          signatureCaptured: true,
+          notes: "Checked at doorstep",
+        },
+      }) as never,
+      {
+        params: Promise.resolve({ orderId: "order-1" }),
+      }
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      status: "READY_FOR_PICKUP",
+      refundStatus: null,
+    });
+    expect(transactionUpdateMock).toHaveBeenCalledWith(
+      orderRef,
+      expect.objectContaining({
+        handoffVerification: expect.objectContaining({
+          idChecked: true,
+          signatureCollected: true,
+          note: "Checked at doorstep",
+          verifiedByUid: "admin-1",
+          verifiedByEmail: "admin@example.com",
+        }),
+        adminHistory: expect.arrayContaining([
+          expect.objectContaining({
+            action: "handoff_verified",
+            from: "id_pending",
+            to: "id_and_signature_checked",
+          }),
+        ]),
+      })
+    );
+  });
+
   it("blocks refund markers for unpaid orders", async () => {
     currentOrderData = {
       ...currentOrderData,
