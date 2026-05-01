@@ -18,7 +18,7 @@ type CountQuery = FirebaseFirestore.Query<FirebaseFirestore.DocumentData>;
 
 const DAYS_7_MS = 7 * 24 * 60 * 60 * 1000;
 
-const STALE_STATUS_ALIASES: Record<AdminOrderStatus, string[]> = {
+const OPEN_STATUS_ALIASES: Record<AdminOrderStatus, string[]> = {
   [ADMIN_ORDER_STATUSES.PENDING_STORE]: ["PENDING_STORE", "NEW"],
   [ADMIN_ORDER_STATUSES.PREPARING]: ["PREPARING", "ACCEPTED"],
   [ADMIN_ORDER_STATUSES.READY_FOR_PICKUP]: ["READY_FOR_PICKUP", "READY"],
@@ -109,19 +109,24 @@ export async function GET(request: NextRequest) {
       .limit(12)
       .get();
 
-    const stalePendingPromise = db
+    const pendingOrdersPromise = db
       .collection("orders")
-      .where("status", "in", STALE_STATUS_ALIASES[ADMIN_ORDER_STATUSES.PENDING_STORE])
+      .where("status", "in", OPEN_STATUS_ALIASES[ADMIN_ORDER_STATUSES.PENDING_STORE])
       .get();
 
-    const stalePreparingPromise = db
+    const preparingOrdersPromise = db
       .collection("orders")
-      .where("status", "in", STALE_STATUS_ALIASES[ADMIN_ORDER_STATUSES.PREPARING])
+      .where("status", "in", OPEN_STATUS_ALIASES[ADMIN_ORDER_STATUSES.PREPARING])
       .get();
 
-    const staleReadyPromise = db
+    const readyOrdersPromise = db
       .collection("orders")
-      .where("status", "in", STALE_STATUS_ALIASES[ADMIN_ORDER_STATUSES.READY_FOR_PICKUP])
+      .where("status", "in", OPEN_STATUS_ALIASES[ADMIN_ORDER_STATUSES.READY_FOR_PICKUP])
+      .get();
+
+    const deliveryOrdersPromise = db
+      .collection("orders")
+      .where("status", "in", OPEN_STATUS_ALIASES[ADMIN_ORDER_STATUSES.OUT_FOR_DELIVERY])
       .get();
 
     const lastWebhookEventPromise = db
@@ -138,9 +143,10 @@ export async function GET(request: NextRequest) {
       recentErrorEvents24h,
       recentCriticalEvents24h,
       recentIncidentsSnapshot,
-      stalePendingSnapshot,
-      stalePreparingSnapshot,
-      staleReadySnapshot,
+      pendingOrdersSnapshot,
+      preparingOrdersSnapshot,
+      readyOrdersSnapshot,
+      deliveryOrdersSnapshot,
       lastWebhookEventSnap,
       syncStateSnap,
     ] = await Promise.all([
@@ -149,20 +155,26 @@ export async function GET(request: NextRequest) {
       recentErrorEventsPromise,
       recentCriticalEventsPromise,
       recentIncidentsPromise,
-      stalePendingPromise,
-      stalePreparingPromise,
-      staleReadyPromise,
+      pendingOrdersPromise,
+      preparingOrdersPromise,
+      readyOrdersPromise,
+      deliveryOrdersPromise,
       lastWebhookEventPromise,
       syncStatePromise,
     ]);
 
-    const stalePending = stalePendingSnapshot.docs.filter((doc) =>
+    const openPending = pendingOrdersSnapshot.docs.length;
+    const openPreparing = preparingOrdersSnapshot.docs.length;
+    const openReady = readyOrdersSnapshot.docs.length;
+    const openOutForDelivery = deliveryOrdersSnapshot.docs.length;
+
+    const stalePending = pendingOrdersSnapshot.docs.filter((doc) =>
       getOrderStaleState(doc.data() as { status?: string; updatedAt?: unknown; createdAt?: unknown }).isStale
     ).length;
-    const stalePreparing = stalePreparingSnapshot.docs.filter((doc) =>
+    const stalePreparing = preparingOrdersSnapshot.docs.filter((doc) =>
       getOrderStaleState(doc.data() as { status?: string; updatedAt?: unknown; createdAt?: unknown }).isStale
     ).length;
-    const staleReady = staleReadySnapshot.docs.filter((doc) =>
+    const staleReady = readyOrdersSnapshot.docs.filter((doc) =>
       getOrderStaleState(doc.data() as { status?: string; updatedAt?: unknown; createdAt?: unknown }).isStale
     ).length;
 
@@ -198,9 +210,16 @@ export async function GET(request: NextRequest) {
       counts: {
         failedNotificationsRecent: failedNotifications,
         failedSyncRecent: failedSyncs,
+        openOrders: openPending + openPreparing + openReady + openOutForDelivery,
         errorEvents24h: recentErrorEvents24h,
         criticalEvents24h: recentCriticalEvents24h,
         staleOrders: stalePending + stalePreparing + staleReady,
+      },
+      openByStatus: {
+        pendingStore: openPending,
+        preparing: openPreparing,
+        readyForPickup: openReady,
+        outForDelivery: openOutForDelivery,
       },
       staleByStatus: {
         pendingStore: stalePending,

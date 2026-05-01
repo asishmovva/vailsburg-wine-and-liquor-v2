@@ -11,9 +11,16 @@ type SystemHealthResponse = {
   counts: {
     failedNotificationsRecent: number;
     failedSyncRecent: number;
+    openOrders: number;
     errorEvents24h: number;
     criticalEvents24h: number;
     staleOrders: number;
+  };
+  openByStatus: {
+    pendingStore: number;
+    preparing: number;
+    readyForPickup: number;
+    outForDelivery: number;
   };
   staleByStatus: {
     pendingStore: number;
@@ -168,13 +175,20 @@ export default function SystemHealthPanel() {
         </div>
         <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
           <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-            Stale open orders
+            Open order backlog
           </p>
           <p className="mt-2 text-2xl font-semibold text-zinc-900">
-            {health.counts.staleOrders}
+            {health.counts.openOrders}
           </p>
           <p className="mt-1 text-xs text-zinc-500">
-            Pending {health.staleByStatus.pendingStore} - Preparing{" "}
+            Pending {health.openByStatus.pendingStore} - Preparing{" "}
+            {health.openByStatus.preparing} - Ready{" "}
+            {health.openByStatus.readyForPickup} - Delivery{" "}
+            {health.openByStatus.outForDelivery}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Stale subset {health.counts.staleOrders} - Pending{" "}
+            {health.staleByStatus.pendingStore} - Preparing{" "}
             {health.staleByStatus.preparing} - Ready{" "}
             {health.staleByStatus.readyForPickup}
           </p>
