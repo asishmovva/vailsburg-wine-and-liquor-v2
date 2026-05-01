@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { requireAuth } from "@/lib/server/requireAuth";
+import { rateLimit } from "@/lib/server/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,20 @@ export async function POST(
   const { auth, error } = await requireAuth(request);
   if (error || !auth) {
     return error ?? NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const limited = rateLimit(`orders-payment-failure:${auth.uid}`, request, {
+    limit: 20,
+    windowMs: 60_000,
+  });
+  if (limited) {
+    return NextResponse.json(
+      {
+        error: "Too many payment failure reports. Please wait and try again.",
+        code: "rate_limited",
+      },
+      { status: 429 }
+    );
   }
 
   const payload = (await request.json().catch(() => null)) as { message?: string } | null;
