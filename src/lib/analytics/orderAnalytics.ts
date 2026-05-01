@@ -17,12 +17,15 @@ import type {
   AnalyticsTrendPoint,
 } from "@/lib/analytics/types";
 import type { OrderNotifications } from "@/lib/orders/types";
+import { withAnalyticsCache } from "@/lib/analytics/cache";
 
 const ANALYTICS_TIME_ZONE = "America/New_York";
 const STALE_OPEN_MINUTES = 60;
 const PENDING_ATTENTION_MINUTES = 30;
 const TOP_PRODUCTS_LIMIT = 10;
 const TOP_CATEGORIES_LIMIT = 8;
+const ANALYTICS_CACHE_TTL_MS = 90_000;
+const ANALYTICS_CACHE_KEY_VERSION = "v1";
 
 type AnalyticsOrder = {
   status?: string | null;
@@ -364,263 +367,295 @@ export async function getAdminAnalytics({
   end?: string | null;
 }): Promise<AdminAnalyticsResponse> {
   const now = new Date();
-  const dateRange = getAnalyticsDateRange({
-    rangeKey: range,
-    start,
-    end,
-    now,
+  const cacheKey = JSON.stringify({
+    version: ANALYTICS_CACHE_KEY_VERSION,
+    range: normalizeRangeKey(range),
+    start: start ?? null,
+    end: end ?? null,
   });
 
-  const db = adminDb();
-  const ordersSnapshot = await db
-    .collection("orders")
-    .where("createdAt", ">=", Timestamp.fromDate(dateRange.startDate))
-    .where("createdAt", "<=", Timestamp.fromDate(dateRange.endDate))
-    .orderBy("createdAt", "asc")
-    .get();
-
-  const cancelledTodayStart = createDateInTimeZone(
-    getTimeZoneDateParts(now, ANALYTICS_TIME_ZONE),
-    0,
-    0,
-    0,
-    0,
-    ANALYTICS_TIME_ZONE
-  );
-  const cancelledTodayEnd = createDateInTimeZone(
-    getTimeZoneDateParts(now, ANALYTICS_TIME_ZONE),
-    23,
-    59,
-    59,
-    999,
-    ANALYTICS_TIME_ZONE
-  );
-
-  const cancelledTodaySnapshot = await db
-    .collection("orders")
-    .where("cancelledAt", ">=", Timestamp.fromDate(cancelledTodayStart))
-    .where("cancelledAt", "<=", Timestamp.fromDate(cancelledTodayEnd))
-    .orderBy("cancelledAt", "asc")
-    .get();
-
-  const trendMap = new Map<string, AnalyticsTrendPoint>();
-  dateRange.keys.forEach((key, index) => {
-    trendMap.set(key, {
-      key,
-      label: dateRange.labels[index] ?? key,
-      orders: 0,
-      paidOrders: 0,
-      revenue: 0,
-      cancelledOrders: 0,
+  const computeAnalytics = async () => {
+    const dateRange = getAnalyticsDateRange({
+      rangeKey: range,
+      start,
+      end,
+      now,
     });
-  });
 
-  const topProductsMap = new Map<string, AnalyticsTopProduct>();
-  const categoryMap = new Map<string, AnalyticsCategoryBreakdown>();
+    const db = adminDb();
+    const ordersSnapshot = await db
+      .collection("orders")
+      .where("createdAt", ">=", Timestamp.fromDate(dateRange.startDate))
+      .where("createdAt", "<=", Timestamp.fromDate(dateRange.endDate))
+      .orderBy("createdAt", "asc")
+      .get();
 
-  let totalOrders = 0;
-  let paidOrders = 0;
-  let paidRevenue = 0;
-  let cancelledOrders = 0;
-  let paymentFailures = 0;
-  let pickupOrders = 0;
-  let deliveryOrders = 0;
-  let deliveryFeeTotal = 0;
-  let tipTotal = 0;
-  let cancelledPickup = 0;
-  let cancelledDelivery = 0;
-  let openOrders = 0;
-  let staleOpenOrders = 0;
-  let pendingOver30Minutes = 0;
-  let notificationFailures = 0;
+    const cancelledTodayStart = createDateInTimeZone(
+      getTimeZoneDateParts(now, ANALYTICS_TIME_ZONE),
+      0,
+      0,
+      0,
+      0,
+      ANALYTICS_TIME_ZONE
+    );
+    const cancelledTodayEnd = createDateInTimeZone(
+      getTimeZoneDateParts(now, ANALYTICS_TIME_ZONE),
+      23,
+      59,
+      59,
+      999,
+      ANALYTICS_TIME_ZONE
+    );
 
-  for (const doc of ordersSnapshot.docs) {
-    const order: AnalyticsOrderRecord = {
-      ...(doc.data() as AnalyticsOrder),
-      id: doc.id,
-    };
-    totalOrders += 1;
+    const cancelledTodaySnapshot = await db
+      .collection("orders")
+      .where("cancelledAt", ">=", Timestamp.fromDate(cancelledTodayStart))
+      .where("cancelledAt", "<=", Timestamp.fromDate(cancelledTodayEnd))
+      .orderBy("cancelledAt", "asc")
+      .get();
 
-    const orderDate = parseFirestoreDate(order.createdAt);
-    const key = orderDate ? getRangeKeyForDate(orderDate) : null;
-    const trend = key ? trendMap.get(key) : null;
-    if (trend) {
-      trend.orders += 1;
-    }
+    const trendMap = new Map<string, AnalyticsTrendPoint>();
+    dateRange.keys.forEach((key, index) => {
+      trendMap.set(key, {
+        key,
+        label: dateRange.labels[index] ?? key,
+        orders: 0,
+        paidOrders: 0,
+        revenue: 0,
+        cancelledOrders: 0,
+      });
+    });
+    const topProductsMap = new Map<string, AnalyticsTopProduct>();
+    const categoryMap = new Map<string, AnalyticsCategoryBreakdown>();
 
-    const normalizedStatus = normalizeOrderStatus(order.status);
-    const normalizedAdminStatus = normalizeAdminOrderStatus(order.status);
-    const fulfillment = order.fulfillment === "delivery" ? "delivery" : "pickup";
+    let totalOrders = 0;
+    let paidOrders = 0;
+    let paidRevenue = 0;
+    let cancelledOrders = 0;
+    let paymentFailures = 0;
+    let pickupOrders = 0;
+    let deliveryOrders = 0;
+    let deliveryFeeTotal = 0;
+    let tipTotal = 0;
+    let cancelledPickup = 0;
+    let cancelledDelivery = 0;
+    let openOrders = 0;
+    let staleOpenOrders = 0;
+    let pendingOver30Minutes = 0;
+    let notificationFailures = 0;
+    let completedOrders = 0;
 
-    if (fulfillment === "delivery") {
-      deliveryOrders += 1;
-    } else {
-      pickupOrders += 1;
-    }
+    for (const doc of ordersSnapshot.docs) {
+      const order: AnalyticsOrderRecord = {
+        ...(doc.data() as AnalyticsOrder),
+        id: doc.id,
+      };
+      totalOrders += 1;
 
-    if (normalizedStatus === ORDER_STATUSES.CANCELLED) {
-      cancelledOrders += 1;
-      if (trend) trend.cancelledOrders += 1;
+      const orderDate = parseFirestoreDate(order.createdAt);
+      const key = orderDate ? getRangeKeyForDate(orderDate) : null;
+      const trend = key ? trendMap.get(key) : null;
+      if (trend) {
+        trend.orders += 1;
+      }
+
+      const normalizedStatus = normalizeOrderStatus(order.status);
+      const normalizedAdminStatus = normalizeAdminOrderStatus(order.status);
+      const fulfillment = order.fulfillment === "delivery" ? "delivery" : "pickup";
+
+      if (normalizedStatus === ORDER_STATUSES.COMPLETED) {
+        completedOrders += 1;
+      }
+
       if (fulfillment === "delivery") {
-        cancelledDelivery += 1;
+        deliveryOrders += 1;
       } else {
-        cancelledPickup += 1;
+        pickupOrders += 1;
+      }
+
+      if (normalizedStatus === ORDER_STATUSES.CANCELLED) {
+        cancelledOrders += 1;
+        if (trend) trend.cancelledOrders += 1;
+        if (fulfillment === "delivery") {
+          cancelledDelivery += 1;
+        } else {
+          cancelledPickup += 1;
+        }
+      }
+
+      if (normalizedStatus === ORDER_STATUSES.FAILED) {
+        paymentFailures += 1;
+      }
+
+      if (normalizedAdminStatus && !isFinalAdminOrderStatus(order.status)) {
+        openOrders += 1;
+        if (isStaleOpenOrder(order, now)) {
+          staleOpenOrders += 1;
+        }
+        if (isPendingOverThreshold(order, now)) {
+          pendingOver30Minutes += 1;
+        }
+      }
+
+      if (hasNotificationFailure(order)) {
+        notificationFailures += 1;
+      }
+
+      if (!isPaidOrder(order)) {
+        continue;
+      }
+
+      paidOrders += 1;
+      const orderRevenue = getNumericValue(order.total);
+      paidRevenue += orderRevenue;
+      deliveryFeeTotal += getNumericValue(order.deliveryFee);
+      tipTotal += getNumericValue(order.tip);
+      if (trend) {
+        trend.paidOrders += 1;
+        trend.revenue += orderRevenue;
+      }
+
+      for (const item of order.items ?? []) {
+        const quantity = getNumericValue(item.qty);
+        if (quantity <= 0) continue;
+
+        const revenue = getNumericValue(item.price) * quantity;
+        const productId = item.productId ?? `${item.name ?? "unknown"}:${item.category ?? "Other"}`;
+        const category = item.category?.trim() || "Other";
+
+        const existingProduct = topProductsMap.get(productId) ?? {
+          productId,
+          name: item.name?.trim() || "Unknown item",
+          category,
+          quantitySold: 0,
+          revenue: 0,
+        };
+        existingProduct.quantitySold += quantity;
+        existingProduct.revenue += revenue;
+        topProductsMap.set(productId, existingProduct);
+
+        const existingCategory = categoryMap.get(category) ?? {
+          category,
+          quantitySold: 0,
+          revenue: 0,
+        };
+        existingCategory.quantitySold += quantity;
+        existingCategory.revenue += revenue;
+        categoryMap.set(category, existingCategory);
       }
     }
 
-    if (normalizedStatus === ORDER_STATUSES.FAILED) {
-      paymentFailures += 1;
-    }
+    const topProducts = [...topProductsMap.values()]
+      .sort(
+        (a, b) =>
+          b.quantitySold - a.quantitySold || b.revenue - a.revenue
+      )
+      .slice(0, TOP_PRODUCTS_LIMIT)
+      .map((row) => ({
+        ...row,
+        revenue: formatCurrency(row.revenue),
+      }));
 
-    if (normalizedAdminStatus && !isFinalAdminOrderStatus(order.status)) {
-      openOrders += 1;
-      if (isStaleOpenOrder(order, now)) {
-        staleOpenOrders += 1;
-      }
-      if (isPendingOverThreshold(order, now)) {
-        pendingOver30Minutes += 1;
-      }
-    }
-
-    if (hasNotificationFailure(order)) {
-      notificationFailures += 1;
-    }
-
-    if (!isPaidOrder(order)) {
-      continue;
-    }
-
-    paidOrders += 1;
-    const orderRevenue = getNumericValue(order.total);
-    paidRevenue += orderRevenue;
-    deliveryFeeTotal += getNumericValue(order.deliveryFee);
-    tipTotal += getNumericValue(order.tip);
-    if (trend) {
-      trend.paidOrders += 1;
-      trend.revenue += orderRevenue;
-    }
-
-    for (const item of order.items ?? []) {
-      const quantity = getNumericValue(item.qty);
-      if (quantity <= 0) continue;
-
-      const revenue = getNumericValue(item.price) * quantity;
-      const productId = item.productId ?? `${item.name ?? "unknown"}:${item.category ?? "Other"}`;
-      const category = item.category?.trim() || "Other";
-
-      const existingProduct = topProductsMap.get(productId) ?? {
-        productId,
-        name: item.name?.trim() || "Unknown item",
-        category,
-        quantitySold: 0,
-        revenue: 0,
-      };
-      existingProduct.quantitySold += quantity;
-      existingProduct.revenue += revenue;
-      topProductsMap.set(productId, existingProduct);
-
-      const existingCategory = categoryMap.get(category) ?? {
-        category,
-        quantitySold: 0,
-        revenue: 0,
-      };
-      existingCategory.quantitySold += quantity;
-      existingCategory.revenue += revenue;
-      categoryMap.set(category, existingCategory);
-    }
-  }
-
-  const topProducts = [...topProductsMap.values()]
-    .sort(
-      (a, b) =>
-        b.quantitySold - a.quantitySold || b.revenue - a.revenue
-    )
-    .slice(0, TOP_PRODUCTS_LIMIT)
-    .map((row) => ({
+    const categoryRows = [...categoryMap.values()].map((row) => ({
       ...row,
       revenue: formatCurrency(row.revenue),
     }));
 
-  const categoryRows = [...categoryMap.values()].map((row) => ({
-    ...row,
-    revenue: formatCurrency(row.revenue),
-  }));
+    const topCategoriesByUnits = sortCategoryBreakdown(categoryRows, "quantity");
+    const topCategoriesByRevenue = sortCategoryBreakdown(categoryRows, "revenue");
 
-  const topCategoriesByUnits = sortCategoryBreakdown(categoryRows, "quantity");
-  const topCategoriesByRevenue = sortCategoryBreakdown(categoryRows, "revenue");
+    const trends = [...trendMap.values()].map((point) => ({
+      ...point,
+      revenue: formatCurrency(point.revenue),
+    }));
 
-  const trends = [...trendMap.values()].map((point) => ({
-    ...point,
-    revenue: formatCurrency(point.revenue),
-  }));
+    const ordersNeedingAttention = new Set<string>();
+    ordersSnapshot.docs.forEach((doc) => {
+      const order: AnalyticsOrderRecord = {
+        ...(doc.data() as AnalyticsOrder),
+        id: doc.id,
+      };
+      if (isStaleOpenOrder(order, now) || hasNotificationFailure(order)) {
+        ordersNeedingAttention.add(order.id);
+      }
+    });
 
-  const ordersNeedingAttention = new Set<string>();
-  ordersSnapshot.docs.forEach((doc) => {
-        const order: AnalyticsOrderRecord = {
-          ...(doc.data() as AnalyticsOrder),
-          id: doc.id,
-        };
-    if (isStaleOpenOrder(order, now) || hasNotificationFailure(order)) {
-      ordersNeedingAttention.add(order.id);
-    }
+    const cancelledToday = cancelledTodaySnapshot.docs.length;
+    const fulfillmentTotal = pickupOrders + deliveryOrders;
+
+    const generatedAt = new Date().toISOString();
+    return {
+      range: {
+        key: dateRange.key,
+        label: dateRange.label,
+        start: dateRange.start,
+        end: dateRange.end,
+        timeZone: dateRange.timeZone,
+        isCustom: dateRange.isCustom,
+      },
+      summary: {
+        totalOrders,
+        paidOrders,
+        paidRevenue: formatCurrency(paidRevenue),
+        averageOrderValue:
+          paidOrders > 0 ? formatCurrency(paidRevenue / paidOrders) : 0,
+        cancelledOrders,
+        paymentFailures,
+      },
+      fulfillment: {
+        pickupOrders,
+        deliveryOrders,
+        pickupPercent:
+          fulfillmentTotal > 0 ? Math.round((pickupOrders / fulfillmentTotal) * 100) : 0,
+        deliveryPercent:
+          fulfillmentTotal > 0 ? Math.round((deliveryOrders / fulfillmentTotal) * 100) : 0,
+        deliveryFeeTotal: formatCurrency(deliveryFeeTotal),
+        tipTotal: formatCurrency(tipTotal),
+        cancelledPickup,
+        cancelledDelivery,
+      },
+      trends,
+      topProducts,
+      topCategoriesByUnits,
+      topCategoriesByRevenue,
+      operational: {
+        ordersNeedingAttention: ordersNeedingAttention.size,
+        staleOpenOrders,
+        pendingOver30Minutes,
+        notificationFailures,
+        openOrders,
+        completedOrders,
+        cancelledToday,
+      },
+      definitions: {
+        revenue:
+          "Paid revenue excludes cancelled, failed, and unpaid pending orders. Product and category metrics use paid orders only.",
+        topProducts:
+          "Top products and categories are aggregated from paid order items in the selected date range.",
+        aggregation:
+          "Analytics are computed from server-side, date-bounded Firestore queries at request time and cached briefly for admin dashboard refreshes.",
+      },
+      meta: {
+        generatedAt,
+        servedFromCache: false,
+        cacheKey,
+        cacheExpiresAt: null,
+      },
+    };
+  };
+
+  const cachedResult = await withAnalyticsCache({
+    key: cacheKey,
+    ttlMs: ANALYTICS_CACHE_TTL_MS,
+    compute: computeAnalytics,
   });
 
-  const cancelledToday = cancelledTodaySnapshot.docs.length;
-  const fulfillmentTotal = pickupOrders + deliveryOrders;
-
   return {
-    range: {
-      key: dateRange.key,
-      label: dateRange.label,
-      start: dateRange.start,
-      end: dateRange.end,
-      timeZone: dateRange.timeZone,
-      isCustom: dateRange.isCustom,
-    },
-    summary: {
-      totalOrders,
-      paidOrders,
-      paidRevenue: formatCurrency(paidRevenue),
-      averageOrderValue:
-        paidOrders > 0 ? formatCurrency(paidRevenue / paidOrders) : 0,
-      cancelledOrders,
-      paymentFailures,
-    },
-    fulfillment: {
-      pickupOrders,
-      deliveryOrders,
-      pickupPercent:
-        fulfillmentTotal > 0 ? Math.round((pickupOrders / fulfillmentTotal) * 100) : 0,
-      deliveryPercent:
-        fulfillmentTotal > 0 ? Math.round((deliveryOrders / fulfillmentTotal) * 100) : 0,
-      deliveryFeeTotal: formatCurrency(deliveryFeeTotal),
-      tipTotal: formatCurrency(tipTotal),
-      cancelledPickup,
-      cancelledDelivery,
-    },
-    trends,
-    topProducts,
-    topCategoriesByUnits,
-    topCategoriesByRevenue,
-    operational: {
-      ordersNeedingAttention: ordersNeedingAttention.size,
-      staleOpenOrders,
-      pendingOver30Minutes,
-      notificationFailures,
-      openOrders,
-      completedOrders: ordersSnapshot.docs.filter((doc) => {
-        const order = doc.data() as AnalyticsOrder;
-        return normalizeOrderStatus(order.status) === ORDER_STATUSES.COMPLETED;
-      }).length,
-      cancelledToday,
-    },
-    definitions: {
-      revenue:
-        "Paid revenue excludes cancelled, failed, and unpaid pending orders. Product and category metrics use paid orders only.",
-      topProducts:
-        "Top products and categories are aggregated from paid order items in the selected date range.",
-      aggregation:
-        "Analytics are computed from server-side, date-bounded Firestore queries at request time.",
+    ...cachedResult.value,
+    meta: {
+      ...cachedResult.value.meta,
+      servedFromCache: cachedResult.cacheHit,
+      cacheExpiresAt: new Date(cachedResult.expiresAtMs).toISOString(),
     },
   };
 }
