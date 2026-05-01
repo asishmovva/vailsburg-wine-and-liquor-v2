@@ -1,6 +1,12 @@
 "use client";
 
 import { Card } from "@/components/ui/Card";
+import {
+  getOrderItemCustomerMessage,
+  getOrderItemFulfillmentStatus,
+  getOrderItemLineItemId,
+  getOrderItemStatusBadge,
+} from "@/lib/orders/inventoryExceptions";
 import { getCustomerStatusMeta } from "@/lib/orders/statusDisplay";
 import type { OrderRecord } from "@/lib/orders/types";
 
@@ -53,6 +59,10 @@ function formatMoney(value: number) {
   return `$${value.toFixed(2)}`;
 }
 
+function getItemSizePack(item: { size?: string; pack?: string }) {
+  return [item.size, item.pack].filter(Boolean).join(" - ");
+}
+
 export function OrderSummaryCard({ order }: { order: OrderRecord }) {
   const fulfillment = order.fulfillment ?? "pickup";
   const customerStatus = order.customerStatus ?? getCustomerStatusMeta(order);
@@ -97,11 +107,14 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
           <p className="text-sm text-zinc-500">No items found for this order.</p>
         ) : (
           <div className="space-y-4">
-            {order.items.map((item) => {
+            {order.items.map((item, index) => {
               const placeholder = getPlaceholder(item.category);
+              const itemStatus = getOrderItemFulfillmentStatus(item);
+              const itemStatusBadge = getOrderItemStatusBadge(itemStatus);
+              const customerMessage = getOrderItemCustomerMessage(item);
               return (
                 <div
-                  key={`${item.productId}-${item.name}`}
+                  key={getOrderItemLineItemId(item, index)}
                   className="flex items-center gap-4 border-b border-zinc-100 pb-4 last:border-b-0 last:pb-0"
                 >
                   {item.image ? (
@@ -124,14 +137,34 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
                   )}
 
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-zinc-900">
-                      {item.name}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-zinc-900">
+                        {item.name}
+                      </p>
+                      {itemStatus !== "pending" ? (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${itemStatusBadge.className}`}
+                        >
+                          {itemStatusBadge.label}
+                        </span>
+                      ) : null}
+                    </div>
                     <p className="text-xs text-zinc-500">
                       Qty <span className="font-semibold text-zinc-700">{item.qty}</span>
                       {" - "}
                       {formatMoney(item.price)}
                     </p>
+                    {getItemSizePack(item) ? (
+                      <p className="text-xs text-zinc-500">{getItemSizePack(item)}</p>
+                    ) : null}
+                    {customerMessage ? (
+                      <p className="mt-1 text-xs text-zinc-600">{customerMessage}</p>
+                    ) : null}
+                    {item.replacement ? (
+                      <p className="mt-1 text-xs text-zinc-600">
+                        Replacement: {item.replacement.qty} x {item.replacement.name}
+                      </p>
+                    ) : null}
                   </div>
                   <p className="text-sm font-semibold text-zinc-900">
                     {formatMoney(item.price * item.qty)}
@@ -144,8 +177,17 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
       </Card>
 
       <Card className="space-y-2 text-sm text-zinc-600">
+        {order.inventoryException?.hasException ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+            <p className="text-sm font-semibold">Order item update</p>
+            <p className="text-xs">
+              {order.inventoryException.summary ??
+                "The store updated one or more items in your order."}
+            </p>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between">
-          <span>Subtotal</span>
+          <span>Original paid subtotal</span>
           <span>{formatMoney(order.subtotal)}</span>
         </div>
         {fulfillment === "delivery" ? (
@@ -174,8 +216,26 @@ export function OrderSummaryCard({ order }: { order: OrderRecord }) {
           <span>Tax</span>
           <span>{formatMoney(order.tax)}</span>
         </div>
+        {order.adjustments?.refundPendingTotal ? (
+          <div className="flex items-center justify-between text-amber-700">
+            <span>Refund pending</span>
+            <span>{formatMoney(order.adjustments.refundPendingTotal)}</span>
+          </div>
+        ) : null}
+        {order.adjustments?.refundCompletedTotal ? (
+          <div className="flex items-center justify-between text-emerald-700">
+            <span>Refund completed</span>
+            <span>{formatMoney(order.adjustments.refundCompletedTotal)}</span>
+          </div>
+        ) : null}
+        {order.adjustments?.replacementDifference ? (
+          <div className="flex items-center justify-between">
+            <span>Replacement difference</span>
+            <span>{formatMoney(order.adjustments.replacementDifference)}</span>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between border-t border-zinc-200 pt-3 text-base font-semibold text-zinc-900">
-          <span>Total</span>
+          <span>Original paid total</span>
           <span>{formatMoney(order.total)}</span>
         </div>
         <p className="text-xs text-zinc-500">Tax calculated at checkout.</p>

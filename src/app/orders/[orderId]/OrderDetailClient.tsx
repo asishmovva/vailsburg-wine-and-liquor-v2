@@ -229,6 +229,14 @@ export default function OrderDetailClient({ orderId }: { orderId: string }) {
         </Card>
       ) : null}
 
+      {order.inventoryException?.hasException ? (
+        <Card className="border-amber-200 bg-amber-50 text-sm text-amber-900">
+          {order.inventoryException.status === "open"
+            ? "One or more items in this order need attention. The store will follow up about any replacement or refund steps."
+            : "One or more items in this order were updated by the store. Review the item details below for the latest status."}
+        </Card>
+      ) : null}
+
       <Card className="space-y-4">
         <div>
           <h2 className="text-lg font-semibold text-zinc-900">Order timeline</h2>

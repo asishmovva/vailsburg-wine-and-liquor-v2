@@ -10,6 +10,7 @@ import type {
 export type NotificationEventKey =
   | "ORDER_RECEIVED"
   | "PAYMENT_CONFIRMED"
+  | "ORDER_UPDATED"
   | "READY_FOR_PICKUP"
   | "OUT_FOR_DELIVERY"
   | "ORDER_COMPLETED"
@@ -20,6 +21,7 @@ export type NotificationEventKey =
 export type NotificationStateKey =
   | "orderReceived"
   | "paymentConfirmed"
+  | "orderUpdated"
   | "readyForPickup"
   | "outForDelivery"
   | "completed"
@@ -55,6 +57,14 @@ export const ORDER_NOTIFICATION_EVENT_CONFIG: Record<
     customerFacing: true,
     adminFacing: false,
     subjectPattern: "Payment confirmed - #{orderNumber}",
+  },
+  ORDER_UPDATED: {
+    key: "ORDER_UPDATED",
+    stateKey: "orderUpdated",
+    dedupeFieldName: "orderUpdated",
+    customerFacing: true,
+    adminFacing: false,
+    subjectPattern: "Update about your order - #{orderNumber}",
   },
   READY_FOR_PICKUP: {
     key: "READY_FOR_PICKUP",
@@ -168,6 +178,8 @@ export function getNotificationEventLabel(
       return "Order received";
     case "PAYMENT_CONFIRMED":
       return "Payment confirmed";
+    case "ORDER_UPDATED":
+      return "Order updated";
     case "READY_FOR_PICKUP":
       return "Ready for pickup";
     case "OUT_FOR_DELIVERY":

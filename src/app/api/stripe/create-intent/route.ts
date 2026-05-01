@@ -70,12 +70,15 @@ type CreateIntentPayload = {
 };
 
 type OrderItem = {
+  lineItemId: string;
   productId: string;
   name: string;
   price: number;
   qty: number;
   image: string | null;
   category: string;
+  size?: string;
+  pack?: string;
 };
 
 type CanonicalAddress = {
@@ -720,6 +723,8 @@ export async function POST(request: Request) {
         image?: string;
         primaryImageUrl?: string;
         category?: string;
+        size?: string;
+        pack?: string;
         taxable?: boolean;
         isSellableOnline?: boolean;
       };
@@ -750,12 +755,15 @@ export async function POST(request: Request) {
       }
 
       orderItems.push({
+        lineItemId: crypto.randomUUID(),
         productId,
         name,
         price,
         qty,
         image: resolveProductImage(data) || null,
         category: data.category ?? "Other",
+        size: typeof data.size === "string" ? data.size : undefined,
+        pack: typeof data.pack === "string" ? data.pack : undefined,
       });
     }
 

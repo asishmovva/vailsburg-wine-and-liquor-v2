@@ -18,6 +18,7 @@ import {
   type NotificationEventKey,
 } from "@/lib/notifications/events";
 import type {
+  OrderItem,
   OrderNotifications,
   OrderNotificationSendStatus,
   OrderRefundStatus,
@@ -27,7 +28,10 @@ const MANUAL_RESEND_COOLDOWN_MS = 60_000;
 
 type OrderNotificationOrder = Omit<OrderEmailData, "items"> & {
   userId?: string | null;
-  items?: Array<{
+  items?: Array<Pick<
+    OrderItem,
+    "lineItemId" | "fulfillmentStatus" | "exceptionReason" | "replacement" | "refund"
+  > & {
     name?: string;
     qty: number;
     price?: number;
@@ -102,6 +106,8 @@ function getCustomerMilestone(
       return "paymentConfirmed";
     case "READY_FOR_PICKUP":
       return "ready";
+    case "ORDER_UPDATED":
+      return "orderUpdated";
     case "OUT_FOR_DELIVERY":
       return "outForDelivery";
     case "ORDER_COMPLETED":
@@ -123,9 +129,26 @@ function buildEmailPayload(
     return buildNewOrderEmail({
       ...order,
       items: (order.items ?? []).map((item) => ({
+        lineItemId: item.lineItemId,
         name: item.name ?? "Item",
         qty: item.qty,
         price: item.price,
+        fulfillmentStatus: item.fulfillmentStatus,
+        exceptionReason: item.exceptionReason ?? null,
+        replacement: item.replacement
+          ? {
+              name: item.replacement.name,
+              price: item.replacement.price,
+              qty: item.replacement.qty,
+            }
+          : null,
+        refund: item.refund
+          ? {
+              amount: item.refund.amount,
+              status: item.refund.status,
+              note: item.refund.note ?? null,
+            }
+          : null,
       })),
     });
   }
@@ -139,9 +162,26 @@ function buildEmailPayload(
     {
       ...order,
       items: (order.items ?? []).map((item) => ({
+        lineItemId: item.lineItemId,
         name: item.name ?? "Item",
         qty: item.qty,
         price: item.price,
+        fulfillmentStatus: item.fulfillmentStatus,
+        exceptionReason: item.exceptionReason ?? null,
+        replacement: item.replacement
+          ? {
+              name: item.replacement.name,
+              price: item.replacement.price,
+              qty: item.replacement.qty,
+            }
+          : null,
+        refund: item.refund
+          ? {
+              amount: item.refund.amount,
+              status: item.refund.status,
+              note: item.refund.note ?? null,
+            }
+          : null,
       })),
     },
     milestone

@@ -13,6 +13,7 @@ export const dynamic = "force-dynamic";
 
 const ALLOWED_RESEND_EVENTS = new Set<NotificationEventKey>([
   "ORDER_RECEIVED",
+  "ORDER_UPDATED",
   "READY_FOR_PICKUP",
   "OUT_FOR_DELIVERY",
   "ORDER_COMPLETED",

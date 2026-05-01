@@ -38,9 +38,19 @@ import {
   normalizeAdminOrderStatus,
   type AdminOrderStatus,
 } from "@/lib/orders/adminStatusTransitions";
+import {
+  getInventoryExceptionBadge,
+  getOrderItemLineItemId,
+  getOrderItemFulfillmentStatus,
+  getOrderItemOperationalSummary,
+  getOrderItemStatusBadge,
+  ORDER_ITEM_FULFILLMENT_STATUSES,
+  type OrderItemFulfillmentStatus,
+} from "@/lib/orders/inventoryExceptions";
 import type {
   OrderAdminHistoryEntry,
   OrderHandoffVerification,
+  OrderItem,
   OrderRecord,
   OrderRefundStatus,
   RefundReconciliationState,
@@ -93,6 +103,31 @@ type MutationPayload = {
     signatureCollected?: boolean;
     note?: string;
   };
+};
+
+type ItemExceptionAction =
+  | "mark_unavailable"
+  | "replace_item"
+  | "mark_refund_pending"
+  | "mark_refund_completed";
+
+type ReplacementSearchResult = {
+  id: string;
+  name: string;
+  category: string;
+  size: string;
+  pack: string;
+  price: number;
+  inStock: boolean;
+  stock: number;
+  image: string;
+};
+
+type ItemExceptionDraft = {
+  orderId: string;
+  itemId: string;
+  item: OrderItem;
+  action: ItemExceptionAction;
 };
 
 type NotificationHealthFilter = "all" | "needs_attention" | "failed" | "missed";
@@ -204,6 +239,16 @@ function getHistoryLabel(entry: OrderAdminHistoryEntry) {
   switch (entry.action) {
     case "cancel":
       return "Cancelled order";
+    case "item_marked_unavailable":
+      return `Marked ${entry.itemName ?? "item"} unavailable`;
+    case "item_replaced":
+      return `Replaced ${entry.itemName ?? "item"}`;
+    case "partial_refund_marked_pending":
+      return `Marked partial refund pending for ${entry.itemName ?? "item"}`;
+    case "partial_refund_marked_completed":
+      return `Marked partial refund completed for ${entry.itemName ?? "item"}`;
+    case "handoff_verified":
+      return "Updated handoff verification";
     case "refund_marked":
       return `Refund ${entry.to?.replace("_", " ") ?? "updated"}`;
     case "note_added":
@@ -211,6 +256,39 @@ function getHistoryLabel(entry: OrderAdminHistoryEntry) {
     case "status_change":
     default:
       return `Changed status to ${entry.to ?? "updated"}`;
+  }
+}
+
+function getItemSizePack(item: Pick<OrderItem, "size" | "pack">) {
+  return [item.size, item.pack].filter(Boolean).join(" - ");
+}
+
+function getItemActionOptions(
+  status: OrderItemFulfillmentStatus
+): Array<{ action: ItemExceptionAction; label: string }> {
+  switch (status) {
+    case ORDER_ITEM_FULFILLMENT_STATUSES.UNAVAILABLE:
+      return [
+        { action: "replace_item", label: "Add replacement" },
+        { action: "mark_refund_pending", label: "Mark refund pending" },
+      ];
+    case ORDER_ITEM_FULFILLMENT_STATUSES.REPLACED:
+      return [
+        { action: "replace_item", label: "Change replacement" },
+        { action: "mark_refund_pending", label: "Mark refund pending" },
+      ];
+    case ORDER_ITEM_FULFILLMENT_STATUSES.REFUND_PENDING:
+      return [{ action: "mark_refund_completed", label: "Mark refund completed" }];
+    case ORDER_ITEM_FULFILLMENT_STATUSES.REFUNDED:
+      return [];
+    case ORDER_ITEM_FULFILLMENT_STATUSES.FULFILLED:
+    case ORDER_ITEM_FULFILLMENT_STATUSES.PENDING:
+    default:
+      return [
+        { action: "mark_unavailable", label: "Mark unavailable" },
+        { action: "replace_item", label: "Replace item" },
+        { action: "mark_refund_pending", label: "Mark refund pending" },
+      ];
   }
 }
 
@@ -406,6 +484,18 @@ export default function AdminOrdersClient() {
   >("default");
   const [printOrderId, setPrintOrderId] = useState<string | null>(null);
   const [resendingKey, setResendingKey] = useState<string | null>(null);
+  const [itemExceptionDraft, setItemExceptionDraft] =
+    useState<ItemExceptionDraft | null>(null);
+  const [itemExceptionReason, setItemExceptionReason] = useState("");
+  const [itemExceptionNote, setItemExceptionNote] = useState("");
+  const [itemExceptionAmount, setItemExceptionAmount] = useState("");
+  const [replacementQuery, setReplacementQuery] = useState("");
+  const [replacementResults, setReplacementResults] = useState<
+    ReplacementSearchResult[]
+  >([]);
+  const [replacementLoading, setReplacementLoading] = useState(false);
+  const [selectedReplacementId, setSelectedReplacementId] = useState<string>("");
+  const [itemExceptionError, setItemExceptionError] = useState<string | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const knownIdsRef = useRef<Set<string>>(new Set());
@@ -569,6 +659,90 @@ export default function AdminOrdersClient() {
     return () => clearTimeout(timeout);
   }, [pendingAction]);
 
+  useEffect(() => {
+    if (!itemExceptionDraft || itemExceptionDraft.action !== "replace_item") {
+      setReplacementResults([]);
+      setReplacementLoading(false);
+      return;
+    }
+
+    const query = replacementQuery.trim();
+    if (query.length < 2) {
+      setReplacementResults([]);
+      setReplacementLoading(false);
+      return;
+    }
+
+    if (!user) return;
+
+    const timeout = setTimeout(async () => {
+      setReplacementLoading(true);
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch(
+          `/api/admin/products/search?q=${encodeURIComponent(query)}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error("Unable to load replacement products.");
+        }
+
+        const result = (await response.json()) as {
+          items?: ReplacementSearchResult[];
+        };
+        setReplacementResults(result.items ?? []);
+      } catch (replacementError) {
+        setReplacementResults([]);
+        setItemExceptionError(
+          (replacementError as Error).message ?? "Unable to load replacement products."
+        );
+      } finally {
+        setReplacementLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timeout);
+  }, [itemExceptionDraft, replacementQuery, user]);
+
+  const openItemExceptionSheet = useCallback(
+    (order: OrderRecord, item: OrderItem, itemId: string, action: ItemExceptionAction) => {
+      setExpandedOrderId(order.id);
+      setItemExceptionDraft({
+        orderId: order.id,
+        itemId,
+        item,
+        action,
+      });
+      setItemExceptionReason(item.exceptionReason ?? "");
+      setItemExceptionNote(item.refund?.note ?? "");
+      setItemExceptionAmount(
+        typeof item.refund?.amount === "number" ? item.refund.amount.toFixed(2) : ""
+      );
+      setReplacementQuery(item.replacement?.name ?? "");
+      setSelectedReplacementId(item.replacement?.productId ?? "");
+      setReplacementResults([]);
+      setItemExceptionError(null);
+    },
+    []
+  );
+
+  const closeItemExceptionSheet = useCallback(() => {
+    setItemExceptionDraft(null);
+    setItemExceptionReason("");
+    setItemExceptionNote("");
+    setItemExceptionAmount("");
+    setReplacementQuery("");
+    setSelectedReplacementId("");
+    setReplacementResults([]);
+    setReplacementLoading(false);
+    setItemExceptionError(null);
+  }, []);
+
   const performMutation = useCallback(
     async ({
       orderId,
@@ -611,6 +785,96 @@ export default function AdminOrdersClient() {
     },
     [fetchOrders, user]
   );
+
+  const submitItemException = useCallback(async () => {
+    if (!user || !itemExceptionDraft) return false;
+
+    const payload: Record<string, unknown> = {
+      action: itemExceptionDraft.action,
+    };
+
+    if (itemExceptionDraft.action === "mark_unavailable") {
+      if (!itemExceptionReason.trim()) {
+        setItemExceptionError("Please add a reason before marking the item unavailable.");
+        return false;
+      }
+      payload.reason = itemExceptionReason.trim();
+    }
+
+    if (itemExceptionDraft.action === "replace_item") {
+      if (!selectedReplacementId) {
+        setItemExceptionError("Select a replacement product first.");
+        return false;
+      }
+      payload.replacementProductId = selectedReplacementId;
+      payload.replacementQty = itemExceptionDraft.item.qty;
+      if (itemExceptionNote.trim()) {
+        payload.note = itemExceptionNote.trim();
+      }
+    }
+
+    if (itemExceptionDraft.action === "mark_refund_pending") {
+      const amount = Number(itemExceptionAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        setItemExceptionError("Enter a valid refund amount.");
+        return false;
+      }
+      payload.amount = amount;
+      if (itemExceptionNote.trim()) {
+        payload.note = itemExceptionNote.trim();
+      }
+    }
+
+    if (itemExceptionDraft.action === "mark_refund_completed") {
+      if (itemExceptionNote.trim()) {
+        payload.note = itemExceptionNote.trim();
+      }
+    }
+
+    setItemExceptionError(null);
+    setUpdatingId(itemExceptionDraft.orderId);
+
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch(
+        `/api/admin/orders/${itemExceptionDraft.orderId}/items/${itemExceptionDraft.itemId}/exception`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (!response.ok) {
+        const result = (await response.json()) as { error?: string };
+        throw new Error(result.error ?? "Unable to update this item.");
+      }
+
+      toast.success("Order item updated");
+      closeItemExceptionSheet();
+      await fetchOrders();
+      return true;
+    } catch (itemError) {
+      const message = (itemError as Error).message ?? "Unable to update this item.";
+      setItemExceptionError(message);
+      toast.error(message);
+      return false;
+    } finally {
+      setUpdatingId(null);
+    }
+  }, [
+    closeItemExceptionSheet,
+    fetchOrders,
+    itemExceptionAmount,
+    itemExceptionDraft,
+    itemExceptionNote,
+    itemExceptionReason,
+    selectedReplacementId,
+    user,
+  ]);
 
   const handlePrimaryAction = useCallback(
     async (order: OrderRecord) => {
@@ -993,6 +1257,7 @@ export default function AdminOrdersClient() {
           const primaryAction = getPrimaryAction(order);
           const canCancel = canCancelOrder(order);
           const refundActions = getRefundActions(order);
+          const inventoryExceptionBadge = getInventoryExceptionBadge(order);
           const deliveryAddress =
             order.fulfillment === "delivery" ? order.delivery?.address : null;
           const phoneHref =
@@ -1012,7 +1277,9 @@ export default function AdminOrdersClient() {
           const historyEntries = [...(order.adminHistory ?? [])]
             .reverse()
             .slice(0, 5);
-          const notificationEvents = getRelevantNotificationEvents(order);
+          const notificationEvents = inventoryExceptionBadge
+            ? [...getRelevantNotificationEvents(order), "ORDER_UPDATED" as NotificationEventKey]
+            : getRelevantNotificationEvents(order);
           const missedNotificationCandidates = getMissedNotificationCandidates(order);
           const hasNotificationFailures = hasNotificationFailure(order);
           const requiresNotificationAttention = hasNotificationAttention(order);
@@ -1078,6 +1345,13 @@ export default function AdminOrdersClient() {
                     {order.refundStatus ? (
                       <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700">
                         Refund: {order.refundStatus.replace("_", " ")}
+                      </span>
+                    ) : null}
+                    {inventoryExceptionBadge ? (
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${inventoryExceptionBadge.className}`}
+                      >
+                        {inventoryExceptionBadge.label}
                       </span>
                     ) : null}
                     {refundReconciliationView ? (
@@ -1188,18 +1462,118 @@ export default function AdminOrdersClient() {
                 {(order.items ?? []).length === 0 ? (
                   <p className="text-sm text-zinc-500">No items found.</p>
                 ) : (
-                  <div className="space-y-2 text-sm text-zinc-700">
-                    {(order.items ?? []).map((item) => (
-                      <div
-                        key={`${order.id}-${item.productId}`}
-                        className="flex items-center justify-between border-b border-zinc-100 pb-2 last:border-b-0 last:pb-0"
-                      >
-                        <span>
-                          <span className="font-semibold">{item.qty}x</span> {item.name}
-                        </span>
-                        <span>{formatMoney(item.price)}</span>
-                      </div>
-                    ))}
+                  <div className="space-y-3 text-sm text-zinc-700">
+                    {(order.items ?? []).map((item, index) => {
+                      const itemId = getOrderItemLineItemId(item, index);
+                      const itemStatus = getOrderItemFulfillmentStatus(item);
+                      const itemStatusBadge = getOrderItemStatusBadge(itemStatus);
+                      const itemSummary = getOrderItemOperationalSummary(item);
+                      const itemActions = getItemActionOptions(itemStatus);
+                      const itemSizePack = getItemSizePack(item);
+
+                      return (
+                        <div
+                          key={`${order.id}-${itemId}`}
+                          className="rounded-2xl border border-zinc-200 p-3"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div className="flex gap-3">
+                              {item.image ? (
+                                <div className="h-12 w-12 overflow-hidden rounded-xl bg-zinc-100">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={item.image}
+                                    alt={item.name}
+                                    className="h-full w-full object-contain object-center p-1"
+                                  />
+                                </div>
+                              ) : (
+                                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                  {item.category ?? "Item"}
+                                </div>
+                              )}
+
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-semibold text-zinc-900">
+                                    {item.qty}x {item.name}
+                                  </p>
+                                  <span
+                                    className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${itemStatusBadge.className}`}
+                                  >
+                                    {itemStatusBadge.label}
+                                  </span>
+                                </div>
+                                {itemSizePack ? (
+                                  <p className="text-xs text-zinc-500">{itemSizePack}</p>
+                                ) : null}
+                                {item.exceptionReason ? (
+                                  <p className="text-xs text-zinc-600">
+                                    Reason: {item.exceptionReason}
+                                  </p>
+                                ) : null}
+                                {itemSummary ? (
+                                  <p className="text-xs font-medium text-zinc-700">
+                                    {itemSummary}
+                                  </p>
+                                ) : null}
+                                {item.replacement ? (
+                                  <div className="rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                                    Replacement: {item.replacement.qty}x{" "}
+                                    {item.replacement.name}
+                                    {getItemSizePack(item.replacement)
+                                      ? ` - ${getItemSizePack(item.replacement)}`
+                                      : ""}
+                                    {typeof item.replacement.price === "number"
+                                      ? ` (${formatMoney(item.replacement.price)})`
+                                      : ""}
+                                  </div>
+                                ) : null}
+                                {item.refund ? (
+                                  <div className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                                    Refund {item.refund.status}:{" "}
+                                    {formatMoney(item.refund.amount)}
+                                    {item.refund.note ? ` - ${item.refund.note}` : ""}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="space-y-2 sm:text-right">
+                              <p className="font-semibold text-zinc-900">
+                                {formatMoney(item.price)}
+                              </p>
+                              <p className="text-xs text-zinc-500">
+                                Line total {formatMoney(item.price * item.qty)}
+                              </p>
+                            </div>
+                          </div>
+
+                          {itemActions.length > 0 ? (
+                            <div className="mt-3 flex flex-wrap gap-2 print:hidden">
+                              {itemActions.map((actionOption) => (
+                                <Button
+                                  key={`${itemId}-${actionOption.action}`}
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    openItemExceptionSheet(
+                                      order,
+                                      item,
+                                      itemId,
+                                      actionOption.action
+                                    )
+                                  }
+                                  disabled={updatingId === order.id}
+                                >
+                                  {actionOption.label}
+                                </Button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1208,6 +1582,35 @@ export default function AdminOrdersClient() {
                 <p>Order notes: {order.statusNote ?? "-"}</p>
                 {order.deliveryInstructions ? (
                   <p>Delivery instructions: {order.deliveryInstructions}</p>
+                ) : null}
+                {order.inventoryException?.hasException ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Inventory exception
+                    </p>
+                    <p className="text-sm">
+                      {order.inventoryException.summary ??
+                        "One or more items need inventory exception handling."}
+                    </p>
+                    {order.adjustments?.refundPendingTotal ? (
+                      <p className="text-xs">
+                        Refund pending: {formatMoney(order.adjustments.refundPendingTotal)}
+                      </p>
+                    ) : null}
+                    {order.adjustments?.refundCompletedTotal ? (
+                      <p className="text-xs">
+                        Refund completed: {formatMoney(
+                          order.adjustments.refundCompletedTotal
+                        )}
+                      </p>
+                    ) : null}
+                    {order.adjustments?.replacementDifference ? (
+                      <p className="text-xs">
+                        Replacement difference:{" "}
+                        {formatMoney(order.adjustments.replacementDifference)}
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 {requiresAlcoholHandoffVerification(order) ? (
                   <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-800">
@@ -1710,6 +2113,268 @@ export default function AdminOrdersClient() {
           </div>
         );
       })() : null}
+
+      {itemExceptionDraft ? (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-0 sm:items-center sm:p-4">
+          <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl bg-white p-6 shadow-xl sm:max-w-2xl sm:rounded-2xl">
+            <div className="space-y-2">
+              <h3 className="text-lg font-semibold text-zinc-900">
+                Item exception workflow
+              </h3>
+              <p className="text-sm text-zinc-600">
+                Update {itemExceptionDraft.item.name} for order #
+                {orderNumberFromId(itemExceptionDraft.orderId)} without cancelling the whole order.
+              </p>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-semibold text-zinc-900">
+                  {itemExceptionDraft.item.qty}x {itemExceptionDraft.item.name}
+                </p>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
+                    getOrderItemStatusBadge(
+                      getOrderItemFulfillmentStatus(itemExceptionDraft.item)
+                    ).className
+                  }`}
+                >
+                  {
+                    getOrderItemStatusBadge(
+                      getOrderItemFulfillmentStatus(itemExceptionDraft.item)
+                    ).label
+                  }
+                </span>
+              </div>
+              {getItemSizePack(itemExceptionDraft.item) ? (
+                <p className="mt-1 text-xs text-zinc-500">
+                  {getItemSizePack(itemExceptionDraft.item)}
+                </p>
+              ) : null}
+              {itemExceptionDraft.item.exceptionReason ? (
+                <p className="mt-1 text-xs text-zinc-600">
+                  Current reason: {itemExceptionDraft.item.exceptionReason}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {getItemActionOptions(
+                getOrderItemFulfillmentStatus(itemExceptionDraft.item)
+              ).map((actionOption) => (
+                <button
+                  key={actionOption.action}
+                  type="button"
+                  onClick={() => {
+                    setItemExceptionDraft((current) =>
+                      current
+                        ? {
+                            ...current,
+                            action: actionOption.action,
+                          }
+                        : current
+                    );
+                    setItemExceptionError(null);
+                  }}
+                  className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                    itemExceptionDraft.action === actionOption.action
+                      ? "border-zinc-900 bg-zinc-900 text-white"
+                      : "border-zinc-200 text-zinc-700 hover:border-zinc-300"
+                  }`}
+                >
+                  {actionOption.label}
+                </button>
+              ))}
+            </div>
+
+            {itemExceptionDraft.action === "mark_unavailable" ? (
+              <div className="mt-4 space-y-2">
+                <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Reason
+                </label>
+                <textarea
+                  className="h-24 w-full rounded-2xl border border-zinc-200 p-3 text-sm text-zinc-700"
+                  value={itemExceptionReason}
+                  onChange={(event) => setItemExceptionReason(event.target.value)}
+                  placeholder="Out of stock, damaged item, etc."
+                />
+              </div>
+            ) : null}
+
+            {itemExceptionDraft.action === "replace_item" ? (
+              <div className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Search replacement product
+                  </label>
+                  <Input
+                    value={replacementQuery}
+                    onChange={(event) => {
+                      setReplacementQuery(event.target.value);
+                      setSelectedReplacementId("");
+                      setItemExceptionError(null);
+                    }}
+                    placeholder="Search by product name"
+                  />
+                  <p className="text-xs text-zinc-500">
+                    Only sellable products are returned. Stock availability is validated again on save.
+                  </p>
+                </div>
+
+                <div className="max-h-64 space-y-2 overflow-y-auto rounded-2xl border border-zinc-200 p-3">
+                  {replacementLoading ? (
+                    <p className="text-sm text-zinc-500">Loading replacements...</p>
+                  ) : replacementQuery.trim().length < 2 ? (
+                    <p className="text-sm text-zinc-500">
+                      Type at least 2 characters to search for a replacement.
+                    </p>
+                  ) : replacementResults.length === 0 ? (
+                    <p className="text-sm text-zinc-500">No replacement products found.</p>
+                  ) : (
+                    replacementResults.map((product) => (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => setSelectedReplacementId(product.id)}
+                        className={`flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+                          selectedReplacementId === product.id
+                            ? "border-zinc-900 bg-zinc-900 text-white"
+                            : "border-zinc-200 text-zinc-800 hover:border-zinc-300"
+                        }`}
+                      >
+                        {product.image ? (
+                          <div className="h-12 w-12 overflow-hidden rounded-xl bg-white/80">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={product.image}
+                              alt={product.name}
+                              className="h-full w-full object-contain object-center p-1"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-zinc-100 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                            {product.category}
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="font-semibold">{product.name}</p>
+                          <p className="text-xs opacity-80">
+                            {[product.size, product.pack].filter(Boolean).join(" - ") || product.category}
+                          </p>
+                          <p className="text-xs opacity-80">
+                            {formatMoney(product.price)} -{" "}
+                            {product.inStock ? `${product.stock} in stock` : "Out of stock"}
+                          </p>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Note
+                  </label>
+                  <textarea
+                    className="h-24 w-full rounded-2xl border border-zinc-200 p-3 text-sm text-zinc-700"
+                    value={itemExceptionNote}
+                    onChange={(event) => setItemExceptionNote(event.target.value)}
+                    placeholder="Customer approved replacement by phone"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {itemExceptionDraft.action === "mark_refund_pending" ? (
+              <div className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Refund amount
+                  </label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={itemExceptionAmount}
+                    onChange={(event) => setItemExceptionAmount(event.target.value)}
+                    placeholder="0.00"
+                  />
+                  <p className="text-xs text-zinc-500">
+                    This tracks a manual refund only. It does not call Stripe.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Note
+                  </label>
+                  <textarea
+                    className="h-24 w-full rounded-2xl border border-zinc-200 p-3 text-sm text-zinc-700"
+                    value={itemExceptionNote}
+                    onChange={(event) => setItemExceptionNote(event.target.value)}
+                    placeholder="Item unavailable"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {itemExceptionDraft.action === "mark_refund_completed" ? (
+              <div className="mt-4 space-y-4">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  <p className="font-semibold">Manual refund tracking only</p>
+                  <p className="mt-1">
+                    This marks the refund as completed in operations. It does not trigger a Stripe refund.
+                  </p>
+                  {typeof itemExceptionDraft.item.refund?.amount === "number" ? (
+                    <p className="mt-2 font-medium">
+                      Pending refund amount:{" "}
+                      {formatMoney(itemExceptionDraft.item.refund.amount)}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Note
+                  </label>
+                  <textarea
+                    className="h-24 w-full rounded-2xl border border-zinc-200 p-3 text-sm text-zinc-700"
+                    value={itemExceptionNote}
+                    onChange={(event) => setItemExceptionNote(event.target.value)}
+                    placeholder="Refund processed manually in Stripe dashboard"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {itemExceptionError ? (
+              <p className="mt-3 text-sm text-red-600">{itemExceptionError}</p>
+            ) : null}
+
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                variant="outline"
+                onClick={closeItemExceptionSheet}
+                disabled={updatingId === itemExceptionDraft.orderId}
+              >
+                Back
+              </Button>
+              <Button
+                onClick={() => void submitItemException()}
+                disabled={updatingId === itemExceptionDraft.orderId}
+              >
+                {itemExceptionDraft.action === "mark_unavailable"
+                  ? "Mark unavailable"
+                  : itemExceptionDraft.action === "replace_item"
+                    ? "Save replacement"
+                    : itemExceptionDraft.action === "mark_refund_pending"
+                      ? "Mark refund pending"
+                      : "Mark refund completed"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {cancelTarget ? (
         <div className="fixed inset-0 z-50 flex items-end bg-black/40 p-0 sm:items-center sm:p-4">
