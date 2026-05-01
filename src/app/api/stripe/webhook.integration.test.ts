@@ -316,4 +316,66 @@ describe("POST /api/stripe/webhook integration paths", () => {
       { merge: true }
     );
   });
+
+  it("ignores payment_intent.succeeded for non-pending operational status", async () => {
+    orderDataById["order-preparing"] = {
+      status: ORDER_STATUSES.PREPARING,
+      userId: "user-3",
+      items: [{ productId: "sku-3", qty: 1 }],
+      total: 30,
+      fulfillment: "pickup",
+      inventoryReservationActive: false,
+      stripe: { paymentIntentId: "pi_preparing" },
+    };
+    constructEventMock.mockReturnValue({
+      id: "evt_preparing",
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_preparing",
+          metadata: { orderId: "order-preparing" },
+          charges: { data: [{ receipt_url: "https://receipt.example/2" }] },
+        },
+      },
+    });
+    stripeEventCreateMock.mockResolvedValue(undefined);
+
+    const { POST } = await import("@/app/api/stripe/webhook/route");
+    const response = await POST(makeWebhookRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ received: true });
+    expect(runTransactionMock).not.toHaveBeenCalled();
+    expect(sendOrderNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores payment_intent.payment_failed after reservation already released", async () => {
+    orderDataById["order-already-failed"] = {
+      status: ORDER_STATUSES.FAILED,
+      userId: "user-4",
+      items: [{ productId: "sku-4", qty: 1 }],
+      total: 18,
+      fulfillment: "delivery",
+      inventoryReservationActive: false,
+    };
+    constructEventMock.mockReturnValue({
+      id: "evt_failed_repeat",
+      type: "payment_intent.payment_failed",
+      data: {
+        object: {
+          id: "pi_failed_repeat",
+          metadata: { orderId: "order-already-failed" },
+        },
+      },
+    });
+    stripeEventCreateMock.mockResolvedValue(undefined);
+
+    const { POST } = await import("@/app/api/stripe/webhook/route");
+    const response = await POST(makeWebhookRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ received: true });
+    expect(runTransactionMock).not.toHaveBeenCalled();
+    expect(userOrderSetMock).not.toHaveBeenCalled();
+  });
 });

@@ -274,4 +274,82 @@ describe("POST /api/stripe/create-intent integration guardrails", () => {
     expect(paymentIntentRetrieveMock).toHaveBeenCalledWith("pi_new");
     expect(paymentIntentCancelMock).toHaveBeenCalledWith("pi_new");
   });
+
+  it("allows one checkout and blocks a second checkout on stale stock view", async () => {
+    let transactionCalls = 0;
+    runTransactionMock.mockImplementation(async (callback: (transaction: unknown) => Promise<void>) => {
+      transactionCalls += 1;
+      if (transactionCalls === 1) {
+        await callback({
+          getAll: async (...refs: Array<{ id: string }>) =>
+            refs.map((ref) => ({
+              exists: true,
+              ref,
+              data: () => ({
+                name: "Cabernet",
+                price: 10,
+                stock: 1,
+                reservedStock: 0,
+                isSellableOnline: true,
+              }),
+            })),
+          update: transactionUpdateMock,
+          set: transactionSetMock,
+        });
+        return;
+      }
+
+      await callback({
+        getAll: async (...refs: Array<{ id: string }>) =>
+          refs.map((ref) => ({
+            exists: true,
+            ref,
+            data: () => ({
+              name: "Cabernet",
+              price: 10,
+              stock: 1,
+              reservedStock: 1,
+              isSellableOnline: true,
+            }),
+          })),
+        update: transactionUpdateMock,
+        set: transactionSetMock,
+      });
+    });
+
+    const { POST } = await import("@/app/api/stripe/create-intent/route");
+    const payload = {
+      items: [{ productId: "sku-1", qty: 1, expectedPrice: 10 }],
+      fulfillment: "pickup" as const,
+      idToken: "token-123",
+      ageVerified: true,
+    };
+
+    const firstResponse = await POST(
+      makeRequest({
+        ...payload,
+        checkoutAttemptKey: "attempt-first",
+      })
+    );
+    expect(firstResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toEqual(
+      expect.objectContaining({
+        clientSecret: "secret_new",
+      })
+    );
+
+    const secondResponse = await POST(
+      makeRequest({
+        ...payload,
+        checkoutAttemptKey: "attempt-second",
+      })
+    );
+    expect(secondResponse.status).toBe(400);
+    await expect(secondResponse.json()).resolves.toEqual({
+      error: "These items are out of stock: Cabernet",
+      code: "items_out_of_stock",
+    });
+    expect(paymentIntentCancelMock).toHaveBeenCalledTimes(1);
+    expect(paymentIntentCancelMock).toHaveBeenCalledWith("pi_new");
+  });
 });

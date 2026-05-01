@@ -45,6 +45,21 @@ type OrderData = {
   reservationExpiresAt?: unknown;
 };
 
+const PAID_ORDER_STATUSES: ReadonlySet<string> = new Set([
+  ORDER_STATUSES.NEW,
+  ORDER_STATUSES.PENDING_STORE,
+  ORDER_STATUSES.ACCEPTED,
+  ORDER_STATUSES.PREPARING,
+  ORDER_STATUSES.READY,
+  ORDER_STATUSES.READY_FOR_PICKUP,
+  ORDER_STATUSES.OUT_FOR_DELIVERY,
+  ORDER_STATUSES.COMPLETED,
+]);
+
+function isPaidOrderStatus(status?: string) {
+  return typeof status === "string" && PAID_ORDER_STATUSES.has(status);
+}
+
 function buildPointer(orderId: string, order: OrderData) {
   return {
     orderId,
@@ -233,12 +248,7 @@ export async function POST(request: Request) {
     }
 
     const orderData = orderSnap.data() as OrderData;
-    if (
-      orderData.status === ORDER_STATUSES.NEW ||
-      orderData.status === ORDER_STATUSES.ACCEPTED ||
-      orderData.status === ORDER_STATUSES.READY ||
-      orderData.status === ORDER_STATUSES.COMPLETED
-    ) {
+    if (isPaidOrderStatus(orderData.status)) {
       if (orderData.userId) {
         await db
           .collection("users")
@@ -255,6 +265,24 @@ export async function POST(request: Request) {
         orderId,
         details: {
           eventType,
+        },
+      });
+      return NextResponse.json({ received: true });
+    }
+    if (
+      orderData.status !== ORDER_STATUSES.PENDING_PAYMENT ||
+      orderData.inventoryReservationActive !== true
+    ) {
+      await logEvent({
+        source: "api/stripe/webhook",
+        eventType: "WEBHOOK_ORDER_NOT_PENDING_SKIP",
+        severity: "info",
+        message: "Webhook event ignored for non-pending order state.",
+        orderId,
+        details: {
+          eventType,
+          status: orderData.status ?? null,
+          inventoryReservationActive: orderData.inventoryReservationActive ?? null,
         },
       });
       return NextResponse.json({ received: true });
@@ -388,12 +416,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ received: true });
     }
 
-    if (
-      orderData.status === ORDER_STATUSES.NEW ||
-      orderData.status === ORDER_STATUSES.ACCEPTED ||
-      orderData.status === ORDER_STATUSES.READY ||
-      orderData.status === ORDER_STATUSES.COMPLETED
-    ) {
+    if (isPaidOrderStatus(orderData.status)) {
       if (orderData.userId) {
         await db
           .collection("users")
@@ -410,6 +433,24 @@ export async function POST(request: Request) {
         orderId,
         details: {
           eventType,
+        },
+      });
+      return NextResponse.json({ received: true });
+    }
+    if (
+      orderData.status !== ORDER_STATUSES.PENDING_PAYMENT ||
+      orderData.inventoryReservationActive !== true
+    ) {
+      await logEvent({
+        source: "api/stripe/webhook",
+        eventType: "WEBHOOK_ORDER_NOT_PENDING_SKIP",
+        severity: "info",
+        message: "Webhook event ignored for non-pending order state.",
+        orderId,
+        details: {
+          eventType,
+          status: orderData.status ?? null,
+          inventoryReservationActive: orderData.inventoryReservationActive ?? null,
         },
       });
       return NextResponse.json({ received: true });
@@ -523,10 +564,8 @@ export async function POST(request: Request) {
       if (orderSnap.exists) {
         const orderData = orderSnap.data() as OrderData;
         if (
-          orderData.status !== ORDER_STATUSES.NEW &&
-          orderData.status !== ORDER_STATUSES.ACCEPTED &&
-          orderData.status !== ORDER_STATUSES.READY &&
-          orderData.status !== ORDER_STATUSES.COMPLETED
+          orderData.status === ORDER_STATUSES.PENDING_PAYMENT &&
+          orderData.inventoryReservationActive === true
         ) {
           const items = orderData.items ?? [];
           await db.runTransaction(async (transaction) => {
@@ -577,6 +616,19 @@ export async function POST(request: Request) {
                 { merge: true }
               );
           }
+        } else {
+          await logEvent({
+            source: "api/stripe/webhook",
+            eventType: "WEBHOOK_ORDER_NOT_PENDING_SKIP",
+            severity: "info",
+            message: "Payment failure webhook ignored for non-pending order state.",
+            orderId,
+            details: {
+              eventType,
+              status: orderData.status ?? null,
+              inventoryReservationActive: orderData.inventoryReservationActive ?? null,
+            },
+          });
         }
       }
     }
@@ -603,10 +655,8 @@ export async function POST(request: Request) {
       if (orderSnap.exists) {
         const orderData = orderSnap.data() as OrderData;
         if (
-          orderData.status !== ORDER_STATUSES.NEW &&
-          orderData.status !== ORDER_STATUSES.ACCEPTED &&
-          orderData.status !== ORDER_STATUSES.READY &&
-          orderData.status !== ORDER_STATUSES.COMPLETED
+          orderData.status === ORDER_STATUSES.PENDING_PAYMENT &&
+          orderData.inventoryReservationActive === true
         ) {
           const items = orderData.items ?? [];
           await db.runTransaction(async (transaction) => {
@@ -657,6 +707,19 @@ export async function POST(request: Request) {
                 { merge: true }
               );
           }
+        } else {
+          await logEvent({
+            source: "api/stripe/webhook",
+            eventType: "WEBHOOK_ORDER_NOT_PENDING_SKIP",
+            severity: "info",
+            message: "Payment cancellation webhook ignored for non-pending order state.",
+            orderId,
+            details: {
+              eventType,
+              status: orderData.status ?? null,
+              inventoryReservationActive: orderData.inventoryReservationActive ?? null,
+            },
+          });
         }
       }
     }
