@@ -11,6 +11,8 @@ type SystemHealthResponse = {
   counts: {
     failedNotificationsRecent: number;
     failedSyncRecent: number;
+    errorEvents24h: number;
+    criticalEvents24h: number;
     staleOrders: number;
   };
   staleByStatus: {
@@ -27,6 +29,25 @@ type SystemHealthResponse = {
     at: string | null;
     status: string | null;
   };
+  alerts: {
+    overallStatus: "ok" | "warning" | "critical";
+    alerts: Array<{
+      id: string;
+      title: string;
+      severity: "warning" | "critical";
+      message: string;
+      actionHref?: string;
+      actionLabel?: string;
+    }>;
+  };
+  recentIncidents: Array<{
+    id: string;
+    source: string;
+    eventType: string;
+    severity: "warning" | "error" | "critical";
+    message: string;
+    createdAt: string | null;
+  }>;
 };
 
 function formatDateTime(value?: string | null) {
@@ -38,6 +59,24 @@ function formatDateTime(value?: string | null) {
 
 function formatDateForInput(value: Date) {
   return value.toISOString().slice(0, 10);
+}
+
+function getHealthBadgeClass(status: "ok" | "warning" | "critical") {
+  if (status === "critical") return "bg-red-700";
+  if (status === "warning") return "bg-amber-700";
+  return "bg-emerald-700";
+}
+
+function getHealthBadgeLabel(status: "ok" | "warning" | "critical") {
+  if (status === "critical") return "Critical";
+  if (status === "warning") return "Warning";
+  return "Healthy";
+}
+
+function getIncidentTextClass(severity: "warning" | "error" | "critical") {
+  if (severity === "critical") return "text-red-700";
+  if (severity === "error") return "text-rose-700";
+  return "text-amber-700";
 }
 
 export default function SystemHealthPanel() {
@@ -108,7 +147,9 @@ export default function SystemHealthPanel() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <p className="text-base font-semibold text-zinc-900">System Health</p>
-          <Badge className="bg-emerald-700">Live</Badge>
+          <Badge className={getHealthBadgeClass(health.alerts.overallStatus)}>
+            {getHealthBadgeLabel(health.alerts.overallStatus)}
+          </Badge>
         </div>
         <p className="text-xs text-zinc-500">
           Last updated {formatDateTime(health.generatedAt)}
@@ -149,6 +190,77 @@ export default function SystemHealthPanel() {
         </div>
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+          <p className="text-[11px] uppercase tracking-wide text-zinc-500">
+            Error events (24h)
+          </p>
+          <p className="mt-2 text-2xl font-semibold text-zinc-900">
+            {health.counts.errorEvents24h}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Includes persisted error-level server incidents
+          </p>
+        </div>
+        <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+          <p className="text-[11px] uppercase tracking-wide text-zinc-500">
+            Critical events (24h)
+          </p>
+          <p className="mt-2 text-2xl font-semibold text-zinc-900">
+            {health.counts.criticalEvents24h}
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Immediate escalation signals
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+          Active Alerts
+        </p>
+        {health.alerts.alerts.length === 0 ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+            No active alerts. System health indicators look stable.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {health.alerts.alerts.map((alert) => (
+              <div
+                key={alert.id}
+                className={`rounded-xl border p-3 text-sm ${
+                  alert.severity === "critical"
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : "border-amber-200 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold">{alert.title}</p>
+                  <Badge
+                    className={
+                      alert.severity === "critical" ? "bg-red-700" : "bg-amber-700"
+                    }
+                  >
+                    {alert.severity.toUpperCase()}
+                  </Badge>
+                </div>
+                <p className="mt-1">{alert.message}</p>
+                {alert.actionHref ? (
+                  <div className="mt-2">
+                    <Link
+                      href={alert.actionHref}
+                      className="text-xs font-semibold underline underline-offset-2"
+                    >
+                      {alert.actionLabel ?? "Investigate"}
+                    </Link>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
           Recent Activity
@@ -182,6 +294,35 @@ export default function SystemHealthPanel() {
             </p>
           </div>
         </div>
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+          Recent Incidents
+        </p>
+        {health.recentIncidents.length === 0 ? (
+          <div className="rounded-xl border border-zinc-200 p-3 text-sm text-zinc-600">
+            No persisted error incidents found.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {health.recentIncidents.map((incident) => (
+              <div
+                key={incident.id}
+                className="rounded-xl border border-zinc-200 p-3 text-xs text-zinc-700"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className={`font-semibold ${getIncidentTextClass(incident.severity)}`}>
+                    {incident.eventType}
+                  </p>
+                  <p className="text-zinc-500">{formatDateTime(incident.createdAt)}</p>
+                </div>
+                <p className="mt-1 text-sm text-zinc-800">{incident.message}</p>
+                <p className="mt-1 text-zinc-500">Source: {incident.source}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
