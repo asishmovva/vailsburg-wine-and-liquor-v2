@@ -79,6 +79,31 @@ export type OrderRefundStatus =
   | "manual_pending"
   | "refunded";
 
+export type RefundReconciliationState =
+  | "not_checked"
+  | "not_marked_refunded"
+  | "stripe_refunded"
+  | "manual_marked_without_stripe_refund"
+  | "manual_marked_without_payment_intent"
+  | "stripe_check_failed";
+
+export type OrderRefundReconciliation = {
+  state: RefundReconciliationState;
+  manualStatus?: OrderRefundStatus | null;
+  manualMarkedRefundedAt?: unknown;
+  manualMarkedByUid?: string | null;
+  manualMarkedByEmail?: string | null;
+  stripePaymentIntentId?: string | null;
+  stripeChargeId?: string | null;
+  stripeAmountRefunded?: number | null;
+  stripeAmountCaptured?: number | null;
+  stripeCurrency?: string | null;
+  stripeRefundCount?: number | null;
+  stripeRefundIds?: string[];
+  stripeLastCheckedAt?: unknown;
+  stripeLastError?: string | null;
+};
+
 export type OrderAdminHistoryEntry = {
   at?: unknown;
   actorUid: string;
@@ -131,6 +156,7 @@ export type OrderRecord = {
   refundStatus?: OrderRefundStatus | null;
   refundNote?: string | null;
   refundedAt?: unknown;
+  refundReconciliation?: OrderRefundReconciliation | null;
   adminHistory?: OrderAdminHistoryEntry[] | null;
   paid?: boolean;
   pos?: {

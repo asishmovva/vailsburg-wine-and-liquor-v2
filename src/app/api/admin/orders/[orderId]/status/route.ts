@@ -5,6 +5,11 @@ import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
 import { sendOrderNotification } from "@/lib/notifications/sendOrderNotification";
 import {
+  buildRefundReconciliation,
+  normalizeStripeChargeCurrency,
+  type StripePaymentIntentLike,
+} from "@/lib/orders/refundReconciliation";
+import {
   ADMIN_ORDER_STATUSES,
   canTransitionAdminOrderStatus,
   getCanonicalNextAdminStatus,
@@ -12,9 +17,11 @@ import {
 import type {
   OrderAdminHistoryEntry,
   OrderNotifications,
+  OrderRefundReconciliation,
   OrderRefundStatus,
 } from "@/lib/orders/types";
 import { requireAdmin } from "@/lib/server/requireAdmin";
+import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,8 +70,10 @@ type OrderData = {
   adminHistory?: OrderAdminHistoryEntry[] | null;
   refundStatus?: OrderRefundStatus | null;
   refundNote?: string | null;
+  refundReconciliation?: OrderRefundReconciliation | null;
   fulfillmentStatus?: string | null;
   cancellationReason?: string | null;
+  stripe?: { paymentIntentId?: string | null } | null;
 };
 
 function isPaidOrder(order: OrderData) {
@@ -212,7 +221,58 @@ export async function POST(
         updates.refundStatus = refundStatus;
         updates.refundNote = refundNote ?? null;
         if (refundStatus === "refunded") {
-          updates.refundedAt = Timestamp.now();
+          const refundedAt = Timestamp.now();
+          updates.refundedAt = refundedAt;
+
+          let paymentIntent: StripePaymentIntentLike | null = null;
+          let stripeCheckFailedMessage: string | null = null;
+          const stripePaymentIntentId = orderData.stripe?.paymentIntentId ?? null;
+          if (stripePaymentIntentId) {
+            try {
+              const stripe = getStripe();
+              const retrieved = await stripe.paymentIntents.retrieve(stripePaymentIntentId, {
+                expand: ["charges.data.refunds"],
+              });
+              const latestCharge = retrieved.charges?.data?.[0];
+              paymentIntent = {
+                id: retrieved.id,
+                amount_received: retrieved.amount_received,
+                currency: normalizeStripeChargeCurrency(retrieved.currency),
+                latest_charge: latestCharge
+                  ? {
+                      id: latestCharge.id,
+                      amount_refunded: latestCharge.amount_refunded,
+                      amount_captured:
+                        typeof latestCharge.amount_captured === "number"
+                          ? latestCharge.amount_captured
+                          : retrieved.amount_received,
+                      currency: normalizeStripeChargeCurrency(latestCharge.currency),
+                      refunds: {
+                        data: (latestCharge.refunds?.data ?? []).map((refund) => ({
+                          id: refund.id,
+                        })),
+                      },
+                    }
+                  : null,
+              };
+            } catch (stripeError) {
+              stripeCheckFailedMessage =
+                (stripeError as Error).message || "Stripe refund check failed.";
+            }
+          }
+
+          updates.refundReconciliation = buildRefundReconciliation({
+            manualStatus: refundStatus,
+            manualMarkedRefundedAt: refundedAt,
+            manualMarkedByUid: admin.uid,
+            manualMarkedByEmail: admin.email ?? null,
+            stripePaymentIntentId,
+            paymentIntent,
+            stripeCheckFailedMessage,
+            now: refundedAt,
+          });
+        } else {
+          updates.refundReconciliation = null;
         }
 
         historyEntries.push({
@@ -243,6 +303,9 @@ export async function POST(
           orderData.refundStatus,
         refundNote:
           (updates.refundNote as string | null | undefined) ?? orderData.refundNote,
+        refundReconciliation:
+          (updates.refundReconciliation as OrderRefundReconciliation | null | undefined) ??
+          orderData.refundReconciliation,
         adminHistory: [...existingHistory, ...historyEntries],
       };
     });
