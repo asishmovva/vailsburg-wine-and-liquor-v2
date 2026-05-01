@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { formatOrderRecordForClient } from "@/lib/orders/formatOrderForClient";
 import { requireAuth } from "@/lib/server/requireAuth";
+import { rateLimit } from "@/lib/server/rateLimit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,17 @@ export async function GET(
   const { auth, error } = await requireAuth(request);
   if (error || !auth) {
     return error ?? NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const limited = rateLimit(`orders-detail:${auth.uid}`, request, {
+    limit: 90,
+    windowMs: 60_000,
+  });
+  if (limited) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait and try again." },
+      { status: 429 }
+    );
   }
 
   const db = adminDb();
