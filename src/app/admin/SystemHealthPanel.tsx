@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
 import { authedFetch } from "@/lib/client/authedFetch";
 
 type SystemHealthResponse = {
@@ -79,10 +80,18 @@ function getIncidentTextClass(severity: "warning" | "error" | "critical") {
   return "text-amber-700";
 }
 
+function getFilenameFromDisposition(value: string | null) {
+  if (!value) return null;
+  const match = value.match(/filename="?([^"]+)"?/i);
+  return match?.[1] ?? null;
+}
+
 export default function SystemHealthPanel() {
   const [health, setHealth] = useState<SystemHealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const loadHealth = useCallback(async () => {
     try {
@@ -121,6 +130,55 @@ export default function SystemHealthPanel() {
     });
     return `/api/admin/orders/export?${params.toString()}`;
   }, []);
+
+  const handleExport = useCallback(async () => {
+    try {
+      setExportError(null);
+      setExporting(true);
+      const response = await authedFetch(exportHref);
+      if (!response.ok) {
+        let message = "Unable to export orders. Please refresh and try again.";
+        if (response.status === 401) {
+          message = "Admin session expired. Please sign in again.";
+        } else if (response.status === 403) {
+          message = "You are not authorized to export orders.";
+        } else {
+          const contentType = response.headers.get("content-type") ?? "";
+          if (contentType.includes("application/json")) {
+            const payload = (await response.json().catch(() => null)) as
+              | { error?: string }
+              | null;
+            if (payload?.error) {
+              message = payload.error;
+            }
+          }
+        }
+        throw new Error(message);
+      }
+
+      const blob = await response.blob();
+      const filename =
+        getFilenameFromDisposition(response.headers.get("content-disposition")) ??
+        "orders-export.csv";
+      const blobUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = blobUrl;
+      anchor.download = filename;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (exportRequestError) {
+      const message =
+        (exportRequestError as Error).message === "Not authenticated"
+          ? "Admin session expired. Please sign in again."
+          : (exportRequestError as Error).message ??
+            "Unable to export orders. Please refresh and try again.";
+      setExportError(message);
+    } finally {
+      setExporting(false);
+    }
+  }, [exportHref]);
 
   if (loading) {
     return (
@@ -332,13 +390,19 @@ export default function SystemHealthPanel() {
         >
           Open Orders Queue
         </Link>
-        <a
-          href={exportHref}
-          className="font-medium text-zinc-800 underline underline-offset-2"
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleExport()}
+          disabled={exporting}
+          className="h-auto p-0 text-xs font-medium text-zinc-800 underline underline-offset-2 hover:bg-transparent"
         >
-          Export last 7 days of orders (CSV)
-        </a>
+          {exporting ? "Exporting..." : "Export last 7 days of orders (CSV)"}
+        </Button>
       </div>
+      {exportError ? (
+        <p className="text-xs font-medium text-red-600">{exportError}</p>
+      ) : null}
     </Card>
   );
 }
