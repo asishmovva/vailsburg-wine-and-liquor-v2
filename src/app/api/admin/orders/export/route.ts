@@ -3,6 +3,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
 import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 
 export const runtime = "nodejs";
@@ -130,6 +131,8 @@ function buildCsv(orders: Array<{ id: string } & ExportOrder>) {
 export async function GET(request: NextRequest) {
   const admin = await requireAdmin(request);
   if (admin.error) return admin.error;
+  const limited = adminRateLimit("heavy", admin.uid, request);
+  if (limited) return limited;
 
   const { searchParams } = new URL(request.url);
   const startDate = parseDate(searchParams.get("start"));

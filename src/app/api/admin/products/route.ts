@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
 import { resolveProductImage } from "@/services/productImage";
 
@@ -28,8 +29,10 @@ function normalizeLimit(value: string | null) {
 }
 
 export async function GET(request: NextRequest) {
-  const { error } = await requireAdmin(request);
+  const { uid, error } = await requireAdmin(request);
   if (error) return error;
+  const limited = adminRateLimit("read", uid, request);
+  if (limited) return limited;
 
   const params = request.nextUrl.searchParams;
   const q = (params.get("q") ?? "").trim().toLowerCase();

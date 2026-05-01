@@ -20,6 +20,7 @@ import type {
   OrderRefundStatus,
 } from "@/lib/orders/types";
 import { requireAdmin } from "@/lib/server/requireAdmin";
+import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -107,6 +108,8 @@ export async function POST(
 ) {
   const admin = await requireAdmin(req);
   if (admin.error) return admin.error;
+  const limited = adminRateLimit("mutate", admin.uid, req);
+  if (limited) return limited;
 
   const { orderId } = await context.params;
   if (!orderId) {
