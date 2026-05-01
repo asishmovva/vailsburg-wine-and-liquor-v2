@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import {
   computeCheckoutTotalCents,
   computeManualTaxCents,
@@ -10,6 +10,15 @@ import {
   MIN_DELIVERY_ORDER,
   TAX_RATE,
 } from "@/lib/checkout/guardrails";
+import {
+  buildReservationExpiry,
+  buildReservationReleaseStock,
+  getAvailableStock,
+  getReservedStock,
+  isReservationExpired,
+  type TimestampLike,
+} from "@/lib/checkout/inventoryReservations";
+import { getFulfillmentAvailability } from "@/lib/checkout/storeAvailability";
 import { adminAuth, adminDb } from "@/lib/firebaseAdmin";
 import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
@@ -83,11 +92,25 @@ type CheckoutAttemptOrder = {
   status?: string | null;
   userId?: string | null;
   checkoutAttemptKey?: string | null;
+  inventoryReservationActive?: boolean | null;
+  reservationExpiresAt?: TimestampLike;
+  items?: Array<{ productId: string; qty: number }> | null;
   stripe?: {
     paymentIntentId?: string | null;
     checkoutSessionId?: string | null;
   } | null;
 };
+
+class CheckoutValidationError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly status: number,
+    readonly meta: Record<string, unknown>
+  ) {
+    super(message);
+  }
+}
 
 function parseNumber(value: unknown) {
   const parsed = Number(value);
@@ -106,10 +129,14 @@ const IMPORTANT_CHECKOUT_FAILURE_CODES = new Set([
   "CHECKOUT_PRICE_MISMATCH",
   "CHECKOUT_PAYMENT_FAIL",
   "CHECKOUT_DUPLICATE_SUBMISSION_BLOCKED",
+  "CHECKOUT_SESSION_EXPIRED",
+  "CHECKOUT_STORE_HOURS_FAIL",
 ]);
 
 function toCheckoutFailureCode(code: string) {
   switch (code) {
+    case "fulfillment_closed":
+      return "CHECKOUT_STORE_HOURS_FAIL";
     case "delivery_radius_exceeded":
       return "CHECKOUT_RADIUS_FAIL";
     case "age_verification_required":
@@ -124,6 +151,8 @@ function toCheckoutFailureCode(code: string) {
       return "CHECKOUT_PAYMENT_FAIL";
     case "duplicate_checkout_attempt":
       return "CHECKOUT_DUPLICATE_SUBMISSION_BLOCKED";
+    case "checkout_attempt_expired":
+      return "CHECKOUT_SESSION_EXPIRED";
     case "delivery_address_invalid":
     case "missing_delivery_coordinates":
       return "CHECKOUT_ADDRESS_VALIDATION_FAIL";
@@ -334,6 +363,163 @@ async function getExistingCheckoutAttempt(userId: string, checkoutAttemptKey: st
   };
 }
 
+async function cancelPaymentIntentIfPossible(paymentIntentId?: string | null) {
+  if (!paymentIntentId) return "missing";
+
+  const stripe = getStripe();
+  const intent = await stripe.paymentIntents.retrieve(paymentIntentId);
+  if (intent.status === "canceled" || intent.status === "succeeded") {
+    return intent.status;
+  }
+  await stripe.paymentIntents.cancel(paymentIntentId);
+  return "canceled";
+}
+
+async function releaseOrderReservation({
+  orderRef,
+  order,
+  status,
+  releaseReason,
+  statusNote,
+}: {
+  orderRef: FirebaseFirestore.DocumentReference;
+  order: CheckoutAttemptOrder;
+  status: string;
+  releaseReason: string;
+  statusNote?: string;
+}) {
+  if (order.inventoryReservationActive !== true) {
+    await orderRef.set(
+      {
+        status,
+        updatedAt: FieldValue.serverTimestamp(),
+        inventoryReservationActive: false,
+        reservationReleaseReason: releaseReason,
+        reservationReleasedAt: FieldValue.serverTimestamp(),
+        statusNote: statusNote ?? null,
+      },
+      { merge: true }
+    );
+    return;
+  }
+
+  const db = adminDb();
+
+  await db.runTransaction(async (transaction) => {
+    const freshSnap = await transaction.get(orderRef);
+    if (!freshSnap.exists) return;
+
+    const freshOrder = freshSnap.data() as CheckoutAttemptOrder;
+    if (freshOrder.inventoryReservationActive !== true) {
+      transaction.set(
+        orderRef,
+        {
+          status,
+          updatedAt: FieldValue.serverTimestamp(),
+          inventoryReservationActive: false,
+          reservationReleaseReason: releaseReason,
+          reservationReleasedAt: FieldValue.serverTimestamp(),
+          statusNote: statusNote ?? null,
+        },
+        { merge: true }
+      );
+      return;
+    }
+
+    const freshItems = freshOrder.items ?? [];
+    const productRefs = freshItems.map((item) =>
+      db.collection("products").doc(item.productId)
+    );
+    const productSnaps = productRefs.length
+      ? await transaction.getAll(...productRefs)
+      : [];
+
+    productSnaps.forEach((productSnap, index) => {
+      if (!productSnap.exists) return;
+      const item = freshItems[index];
+      const data = productSnap.data() as { reservedStock?: number; stock?: number };
+      const nextReserved = buildReservationReleaseStock(
+        getReservedStock(data),
+        item.qty
+      );
+
+      transaction.update(productSnap.ref, {
+        reservedStock: nextReserved,
+        inStock: Number(data.stock ?? 0) > 0,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    });
+
+    transaction.set(
+      orderRef,
+      {
+        status,
+        updatedAt: FieldValue.serverTimestamp(),
+        inventoryReservationActive: false,
+        reservationReleaseReason: releaseReason,
+        reservationReleasedAt: FieldValue.serverTimestamp(),
+        reservationExpiresAt: null,
+        statusNote: statusNote ?? null,
+      },
+      { merge: true }
+    );
+  });
+}
+
+async function cleanupExpiredCheckoutReservations() {
+  const db = adminDb();
+  const snapshot = await db
+    .collection("orders")
+    .where("inventoryReservationActive", "==", true)
+    .limit(12)
+    .get();
+
+  if (snapshot.empty) return;
+
+  for (const doc of snapshot.docs) {
+    const order = doc.data() as CheckoutAttemptOrder;
+    if (order.status !== ORDER_STATUSES.PENDING_PAYMENT) continue;
+    if (!isReservationExpired(order)) continue;
+
+    try {
+      const cancelResult = await cancelPaymentIntentIfPossible(
+        order.stripe?.paymentIntentId
+      );
+      if (cancelResult === "succeeded") {
+        continue;
+      }
+      await releaseOrderReservation({
+        orderRef: doc.ref,
+        order,
+        status: ORDER_STATUSES.FAILED,
+        releaseReason: "expired_checkout_attempt",
+        statusNote: "Checkout session expired before payment was completed.",
+      });
+
+      logCheckoutEvent(
+        "warning",
+        "CHECKOUT_RESERVATION_EXPIRED",
+        "Expired checkout reservation released.",
+        {
+          orderId: order.id ?? doc.id,
+          paymentIntentId: order.stripe?.paymentIntentId ?? null,
+        },
+        true
+      );
+    } catch (error) {
+      await logError({
+        source: "api/stripe/create-intent",
+        eventType: "CHECKOUT_RESERVATION_CLEANUP_FAIL",
+        severity: "error",
+        message: "Failed to release expired checkout reservation.",
+        error,
+        orderId: order.id ?? doc.id,
+        persist: true,
+      });
+    }
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const payload = (await request.json()) as CreateIntentPayload;
@@ -363,6 +549,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
+    const db = adminDb();
+    const stripe = getStripe();
+
     const checkoutAttemptKey = normalizeText(payload.checkoutAttemptKey);
     if (!checkoutAttemptKey) {
       return validationResponse(
@@ -383,12 +572,46 @@ export async function POST(request: Request) {
       );
     }
 
+    const fulfillmentAvailability = getFulfillmentAvailability(fulfillment);
+    if (!fulfillmentAvailability.isOpen) {
+      return validationResponse(
+        400,
+        fulfillmentAvailability.message ??
+          "Orders are currently unavailable for this fulfillment type.",
+        "fulfillment_closed",
+        {
+          userId,
+          fulfillment,
+          hoursLabel: fulfillmentAvailability.label,
+          timeZone: fulfillmentAvailability.timeZone,
+        }
+      );
+    }
+
+    await cleanupExpiredCheckoutReservations();
+
     const existingAttempt = await getExistingCheckoutAttempt(userId, checkoutAttemptKey);
+    if (
+      existingAttempt?.data &&
+      (isReservationExpired(existingAttempt.data) ||
+        existingAttempt.data.inventoryReservationActive === false)
+    ) {
+      return validationResponse(
+        409,
+        "Your checkout session expired. Please try checkout again.",
+        "checkout_attempt_expired",
+        {
+          userId,
+          checkoutAttemptKey,
+          orderId: existingAttempt.data.id ?? existingAttempt.ref.id,
+        }
+      );
+    }
+
     if (existingAttempt?.data?.stripe?.paymentIntentId) {
       const existingStatus = normalizeText(existingAttempt.data.status);
       if (existingStatus === ORDER_STATUSES.PENDING_PAYMENT) {
         try {
-          const stripe = getStripe();
           const existingIntent = await stripe.paymentIntents.retrieve(
             existingAttempt.data.stripe.paymentIntentId
           );
@@ -443,7 +666,6 @@ export async function POST(request: Request) {
       }
     }
 
-    const db = adminDb();
     const productsRef = db.collection("products");
     const orderItems: OrderItem[] = [];
     const unavailableItems: string[] = [];
@@ -489,8 +711,8 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const stock = Math.floor(parseNumber(data.stock));
-      if (stock <= 0 || qty > stock) {
+      const availableStock = getAvailableStock(data);
+      if (availableStock <= 0 || qty > availableStock) {
         outOfStockItems.push(name);
         continue;
       }
@@ -713,7 +935,6 @@ export async function POST(request: Request) {
       taxCents,
     });
 
-    const stripe = getStripe();
     const orderRef = db.collection("orders").doc();
     const orderId = orderRef.id;
     let paymentIntent;
@@ -755,55 +976,152 @@ export async function POST(request: Request) {
         { status: 502 }
       );
     }
+    const reservationExpiresAt = Timestamp.fromDate(buildReservationExpiry());
 
-    await orderRef.set({
-      id: orderId,
-      orderId,
-      userId,
-      email,
-      guestId: null,
-      checkoutAttemptKey,
-      ageVerified: true,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      status: ORDER_STATUSES.PENDING_PAYMENT,
-      paid: false,
-      fulfillment,
-      delivery: deliveryInfo ?? null,
-      deliveryInstructions: fulfillment === "delivery" ? deliveryInstructions || null : null,
-      deliveryFee,
-      tip: tipAmount,
-      subtotal,
-      taxableSubtotal,
-      tax: taxCents / 100,
-      taxRate,
-      taxStrategy,
-      total: totalCents / 100,
-      items: orderItems,
-      stripe: {
-        paymentIntentId: paymentIntent.id,
-        clientSecretLast4: paymentIntent.client_secret?.slice(-4) ?? null,
-      },
-    });
+    try {
+      await db.runTransaction(async (transaction) => {
+        const productRefs = items.map((item) =>
+          productsRef.doc(normalizeText(item.productId))
+        );
+        const productSnaps = productRefs.length
+          ? await transaction.getAll(...productRefs)
+          : [];
 
-    if (userId) {
-      await db
-        .collection("users")
-        .doc(userId)
-        .collection("orders")
-        .doc(orderId)
-        .set({
+        for (let index = 0; index < items.length; index += 1) {
+          const item = items[index];
+          const productId = normalizeText(item.productId);
+          const qty = Math.floor(parseNumber(item.qty));
+          const expectedPrice = parseNumber(item.expectedPrice);
+          const productSnap = productSnaps[index];
+
+          if (!productId || qty <= 0 || !productSnap?.exists) {
+            throw new CheckoutValidationError(
+              "Some products are no longer available. Please review your cart and try again.",
+              "items_unavailable",
+              400,
+              { userId, productId }
+            );
+          }
+
+          const data = productSnap.data() as {
+            name?: string;
+            price?: number;
+            stock?: number;
+            reservedStock?: number;
+            isSellableOnline?: boolean;
+          };
+
+          const name = data.name ?? productId;
+          if (data.isSellableOnline !== true) {
+            throw new CheckoutValidationError(
+              `These items are no longer available online: ${name}`,
+              "items_blocked",
+              400,
+              { userId, productId }
+            );
+          }
+
+          const availableStock = getAvailableStock(data);
+          if (availableStock <= 0 || qty > availableStock) {
+            throw new CheckoutValidationError(
+              `These items are out of stock: ${name}`,
+              "items_out_of_stock",
+              400,
+              { userId, productId, availableStock, qty }
+            );
+          }
+
+          const price = parseNumber(data.price);
+          if (hasPriceMismatch(expectedPrice, price)) {
+            throw new CheckoutValidationError(
+              `Prices changed for: ${name}. Please review your cart and try again.`,
+              "price_mismatch",
+              409,
+              { userId, productId }
+            );
+          }
+
+          transaction.update(productSnap.ref, {
+            reservedStock: getReservedStock(data) + qty,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+
+        transaction.set(orderRef, {
+          id: orderId,
           orderId,
-          status: ORDER_STATUSES.PENDING_PAYMENT,
-          total: totalCents / 100,
-          fulfillment,
-          items: orderItems,
+          userId,
+          email,
+          guestId: null,
+          checkoutAttemptKey,
           ageVerified: true,
-          deliveryInstructions:
-            fulfillment === "delivery" ? deliveryInstructions || null : null,
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
+          status: ORDER_STATUSES.PENDING_PAYMENT,
+          paid: false,
+          fulfillment,
+          delivery: deliveryInfo ?? null,
+          deliveryInstructions:
+            fulfillment === "delivery" ? deliveryInstructions || null : null,
+          deliveryFee,
+          tip: tipAmount,
+          subtotal,
+          taxableSubtotal,
+          tax: taxCents / 100,
+          taxRate,
+          taxStrategy,
+          total: totalCents / 100,
+          items: orderItems,
+          inventoryReservationActive: true,
+          reservationExpiresAt,
+          reservedAt: FieldValue.serverTimestamp(),
+          stripe: {
+            paymentIntentId: paymentIntent.id,
+            clientSecretLast4: paymentIntent.client_secret?.slice(-4) ?? null,
+          },
         });
+
+        if (userId) {
+          const pointerRef = db
+            .collection("users")
+            .doc(userId)
+            .collection("orders")
+            .doc(orderId);
+          transaction.set(pointerRef, {
+            orderId,
+            status: ORDER_STATUSES.PENDING_PAYMENT,
+            total: totalCents / 100,
+            fulfillment,
+            items: orderItems,
+            ageVerified: true,
+            deliveryInstructions:
+              fulfillment === "delivery" ? deliveryInstructions || null : null,
+            createdAt: FieldValue.serverTimestamp(),
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      });
+    } catch (error) {
+      try {
+        await cancelPaymentIntentIfPossible(paymentIntent.id);
+      } catch (cancelError) {
+        await logError({
+          source: "api/stripe/create-intent",
+          eventType: "CHECKOUT_PAYMENT_INTENT_CANCEL_FAIL",
+          severity: "warning",
+          message: "Failed to cancel payment intent after checkout reservation error.",
+          error: cancelError,
+          orderId,
+          userId,
+          persist: true,
+        });
+      }
+
+      if (error instanceof CheckoutValidationError) {
+        return validationResponse(error.status, error.message, error.code, error.meta);
+      }
+
+      throw error;
     }
 
     return NextResponse.json({

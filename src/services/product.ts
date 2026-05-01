@@ -2,6 +2,7 @@
 
 import { adminDb } from "@/lib/firebaseAdmin";
 import { TTLCache } from "@/lib/cache/ttlCache";
+import { getAvailableStock } from "@/lib/checkout/inventoryReservations";
 import { resolveProductImage } from "@/services/productImage";
 import type { ProductDetail } from "@/services/productTypes";
 
@@ -53,6 +54,7 @@ export async function loadProductById(
     primaryImageUrl?: string;
     stock?: number;
     inStock?: boolean;
+    reservedStock?: number;
     size?: string;
     pack?: string;
     upc?: string;
@@ -68,6 +70,11 @@ export async function loadProductById(
     return null;
   }
 
+  const availableStock = getAvailableStock(data);
+  const inStock =
+    (typeof data.inStock === "boolean" ? data.inStock : true) &&
+    availableStock > 0;
+
   const product: ProductDetail = {
     id: snapshot.id,
     name: data.name ?? "Unnamed item",
@@ -76,9 +83,8 @@ export async function loadProductById(
     price: typeof data.price === "number" ? data.price : 0,
     image: resolveProductImage(data),
     primaryImageUrl: data.primaryImageUrl ?? "",
-    stock: typeof data.stock === "number" ? data.stock : 0,
-    inStock:
-      typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,
+    stock: availableStock,
+    inStock,
     size: data.size ?? "",
     pack: data.pack ?? "",
     upc: data.upc ?? "",

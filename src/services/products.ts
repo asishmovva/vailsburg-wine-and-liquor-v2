@@ -2,6 +2,7 @@ import "server-only";
 
 import { adminDb } from "@/lib/firebaseAdmin";
 import { normalizeCategory } from "@/lib/catalog/onlineCatalogRules";
+import { getAvailableStock } from "@/lib/checkout/inventoryReservations";
 import { resolveProductImage } from "@/services/productImage";
 import type { Product, ProductFilters, ProductSort } from "@/services/productTypes";
 import { FieldPath, Timestamp } from "firebase-admin/firestore";
@@ -183,6 +184,7 @@ export async function queryProducts(filters: ProductFilters) {
       primaryImageUrl?: string;
       stock?: number;
       inStock?: boolean;
+      reservedStock?: number;
       size?: string;
       pack?: string;
       upc?: string;
@@ -193,6 +195,11 @@ export async function queryProducts(filters: ProductFilters) {
       createdAt?: FirebaseFirestore.Timestamp | null;
     };
 
+    const availableStock = getAvailableStock(data);
+    const inStock =
+      (typeof data.inStock === "boolean" ? data.inStock : true) &&
+      availableStock > 0;
+
     return {
       id: doc.id,
       name: data.name ?? "Unnamed item",
@@ -201,9 +208,8 @@ export async function queryProducts(filters: ProductFilters) {
       price: typeof data.price === "number" ? data.price : 0,
       image: resolveProductImage(data),
       primaryImageUrl: data.primaryImageUrl ?? "",
-      stock: typeof data.stock === "number" ? data.stock : 0,
-      inStock:
-        typeof data.inStock === "boolean" ? data.inStock : (data.stock ?? 0) > 0,
+      stock: availableStock,
+      inStock,
       createdAt: data.createdAt?.toMillis?.() ?? null,
       size: data.size ?? "",
       pack: data.pack ?? "",

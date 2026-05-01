@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebaseAdmin";
+import {
+  buildReservationReleaseStock,
+  getReservedStock,
+} from "@/lib/checkout/inventoryReservations";
 import { logError } from "@/lib/ops/logError";
 import { logEvent } from "@/lib/ops/logEvent";
 import type { OrderNotifications } from "@/lib/orders/types";
@@ -37,6 +41,8 @@ type OrderData = {
   updatedAt?: unknown;
   paidAt?: unknown;
   stripe?: { paymentIntentId?: string; checkoutSessionId?: string };
+  inventoryReservationActive?: boolean | null;
+  reservationExpiresAt?: unknown;
 };
 
 function buildPointer(orderId: string, order: OrderData) {
@@ -48,6 +54,26 @@ function buildPointer(orderId: string, order: OrderData) {
     createdAt: order.createdAt ?? FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
     items: order.items ?? [],
+  };
+}
+
+function buildCommittedInventoryUpdate(currentStock: number, currentReserved: number, qty: number) {
+  const updatedStock = Math.max(currentStock - qty, 0);
+  const updatedReserved = buildReservationReleaseStock(currentReserved, qty);
+  return {
+    stock: updatedStock,
+    reservedStock: updatedReserved,
+    inStock: updatedStock > 0,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
+function buildReleasedInventoryUpdate(currentStock: number, currentReserved: number, qty: number) {
+  const updatedReserved = buildReservationReleaseStock(currentReserved, qty);
+  return {
+    reservedStock: updatedReserved,
+    inStock: currentStock > 0,
+    updatedAt: FieldValue.serverTimestamp(),
   };
 }
 
@@ -252,16 +278,20 @@ export async function POST(request: Request) {
       productSnaps.forEach((productSnap, index) => {
         if (!productSnap.exists) return;
         const item = items[index];
-        const data = productSnap.data() as { stock?: number };
+        const data = productSnap.data() as { stock?: number; reservedStock?: number };
         const currentStock = Number(data.stock ?? 0);
-        const updatedStock = Math.max(currentStock - item.qty, 0);
-        if (currentStock - item.qty < 0) inventoryWarning = true;
+        const currentReserved = getReservedStock(data);
+        if (
+          (orderData.inventoryReservationActive === true && currentReserved < item.qty) ||
+          (orderData.inventoryReservationActive !== true && currentStock - item.qty < 0)
+        ) {
+          inventoryWarning = true;
+        }
 
-        transaction.update(productSnap.ref, {
-          stock: updatedStock,
-          inStock: updatedStock > 0,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+        transaction.update(
+          productSnap.ref,
+          buildCommittedInventoryUpdate(currentStock, currentReserved, item.qty)
+        );
       });
 
       transaction.update(orderRef, {
@@ -270,6 +300,10 @@ export async function POST(request: Request) {
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
+        inventoryReservationActive: false,
+        reservationReleasedAt: FieldValue.serverTimestamp(),
+        reservationReleaseReason: "payment_confirmed",
+        reservationExpiresAt: null,
         stripe: {
           paymentIntentId: intentId ?? null,
           checkoutSessionId: session.id,
@@ -396,16 +430,20 @@ export async function POST(request: Request) {
       productSnaps.forEach((productSnap, index) => {
         if (!productSnap.exists) return;
         const item = items[index];
-        const data = productSnap.data() as { stock?: number };
+        const data = productSnap.data() as { stock?: number; reservedStock?: number };
         const currentStock = Number(data.stock ?? 0);
-        const updatedStock = Math.max(currentStock - item.qty, 0);
-        if (currentStock - item.qty < 0) inventoryWarning = true;
+        const currentReserved = getReservedStock(data);
+        if (
+          (orderData.inventoryReservationActive === true && currentReserved < item.qty) ||
+          (orderData.inventoryReservationActive !== true && currentStock - item.qty < 0)
+        ) {
+          inventoryWarning = true;
+        }
 
-        transaction.update(productSnap.ref, {
-          stock: updatedStock,
-          inStock: updatedStock > 0,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
+        transaction.update(
+          productSnap.ref,
+          buildCommittedInventoryUpdate(currentStock, currentReserved, item.qty)
+        );
       });
 
       transaction.update(orderRef, {
@@ -414,6 +452,10 @@ export async function POST(request: Request) {
         inventoryWarning,
         paidAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
+        inventoryReservationActive: false,
+        reservationReleasedAt: FieldValue.serverTimestamp(),
+        reservationReleaseReason: "payment_confirmed",
+        reservationExpiresAt: null,
         stripe: {
           paymentIntentId: intent.id,
           receiptUrl,
@@ -486,9 +528,35 @@ export async function POST(request: Request) {
           orderData.status !== ORDER_STATUSES.READY &&
           orderData.status !== ORDER_STATUSES.COMPLETED
         ) {
-          await orderRef.update({
-            status: ORDER_STATUSES.FAILED,
-            updatedAt: FieldValue.serverTimestamp(),
+          const items = orderData.items ?? [];
+          await db.runTransaction(async (transaction) => {
+            const productRefs = items.map((item) =>
+              db.collection("products").doc(item.productId)
+            );
+            const productSnaps = productRefs.length
+              ? await transaction.getAll(...productRefs)
+              : [];
+
+            productSnaps.forEach((productSnap, index) => {
+              if (!productSnap.exists || orderData.inventoryReservationActive !== true) return;
+              const item = items[index];
+              const data = productSnap.data() as { stock?: number; reservedStock?: number };
+              const currentStock = Number(data.stock ?? 0);
+              const currentReserved = getReservedStock(data);
+              transaction.update(
+                productSnap.ref,
+                buildReleasedInventoryUpdate(currentStock, currentReserved, item.qty)
+              );
+            });
+
+            transaction.update(orderRef, {
+              status: ORDER_STATUSES.FAILED,
+              updatedAt: FieldValue.serverTimestamp(),
+              inventoryReservationActive: false,
+              reservationReleasedAt: FieldValue.serverTimestamp(),
+              reservationReleaseReason: "payment_failed",
+              reservationExpiresAt: null,
+            });
           });
           if (orderData.userId) {
             await db
@@ -540,9 +608,35 @@ export async function POST(request: Request) {
           orderData.status !== ORDER_STATUSES.READY &&
           orderData.status !== ORDER_STATUSES.COMPLETED
         ) {
-          await orderRef.update({
-            status: ORDER_STATUSES.CANCELLED,
-            updatedAt: FieldValue.serverTimestamp(),
+          const items = orderData.items ?? [];
+          await db.runTransaction(async (transaction) => {
+            const productRefs = items.map((item) =>
+              db.collection("products").doc(item.productId)
+            );
+            const productSnaps = productRefs.length
+              ? await transaction.getAll(...productRefs)
+              : [];
+
+            productSnaps.forEach((productSnap, index) => {
+              if (!productSnap.exists || orderData.inventoryReservationActive !== true) return;
+              const item = items[index];
+              const data = productSnap.data() as { stock?: number; reservedStock?: number };
+              const currentStock = Number(data.stock ?? 0);
+              const currentReserved = getReservedStock(data);
+              transaction.update(
+                productSnap.ref,
+                buildReleasedInventoryUpdate(currentStock, currentReserved, item.qty)
+              );
+            });
+
+            transaction.update(orderRef, {
+              status: ORDER_STATUSES.CANCELLED,
+              updatedAt: FieldValue.serverTimestamp(),
+              inventoryReservationActive: false,
+              reservationReleasedAt: FieldValue.serverTimestamp(),
+              reservationReleaseReason: "payment_canceled",
+              reservationExpiresAt: null,
+            });
           });
           if (orderData.userId) {
             await db

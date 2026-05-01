@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebaseAdmin";
+import { getAvailableStock } from "@/lib/checkout/inventoryReservations";
 import { rateLimit } from "@/lib/server/rateLimit";
 import { resolveProductImage } from "@/services/productImage";
 
@@ -52,9 +53,14 @@ export async function GET(request: NextRequest) {
       primaryImageUrl?: string;
       stock?: number;
       inStock?: boolean;
+      reservedStock?: number;
       size?: string;
       pack?: string;
     };
+    const availableStock = getAvailableStock(data);
+    const inStock =
+      (typeof data.inStock === "boolean" ? data.inStock : true) &&
+      availableStock > 0;
     return {
       id: doc.id,
       name: data.name ?? "Unnamed item",
@@ -62,11 +68,8 @@ export async function GET(request: NextRequest) {
       price: typeof data.price === "number" ? data.price : 0,
       image: resolveProductImage(data),
       primaryImageUrl: data.primaryImageUrl ?? "",
-      stock: typeof data.stock === "number" ? data.stock : 0,
-      inStock:
-        typeof data.inStock === "boolean"
-          ? data.inStock
-          : (data.stock ?? 0) > 0,
+      stock: availableStock,
+      inStock,
       size: data.size ?? "",
       pack: data.pack ?? "",
     };
