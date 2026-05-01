@@ -168,15 +168,22 @@ export async function POST(
     refundNote = normalizeOptionalText(body.refundNote);
     const handoffPayload = body.handoffVerification ?? body.alcoholHandoff;
     if (handoffPayload) {
+      const signatureCollectedValue =
+        "signatureCollected" in handoffPayload
+          ? handoffPayload.signatureCollected
+          : undefined;
+      const signatureCapturedValue =
+        "signatureCaptured" in handoffPayload
+          ? handoffPayload.signatureCaptured
+          : undefined;
+      const handoffNoteValue = "note" in handoffPayload
+        ? handoffPayload.note
+        : ("notes" in handoffPayload ? handoffPayload.notes : undefined);
       updatesFromBody.handoffVerification = {
         idChecked: handoffPayload.idChecked === true,
         signatureCollected:
-          handoffPayload.signatureCollected === true ||
-          handoffPayload.signatureCaptured === true,
-        note:
-          normalizeOptionalText(
-            "note" in handoffPayload ? handoffPayload.note : handoffPayload.notes
-          ) ?? null,
+          signatureCollectedValue === true || signatureCapturedValue === true,
+        note: normalizeOptionalText(handoffNoteValue) ?? null,
       };
     }
   } catch {
