@@ -655,6 +655,7 @@ export async function getAdminAnalytics({
     meta: {
       ...cachedResult.value.meta,
       servedFromCache: cachedResult.cacheHit,
+      cacheSource: cachedResult.cacheHit ? "memory" : "live",
       cacheExpiresAt: new Date(cachedResult.expiresAtMs).toISOString(),
     },
   };

@@ -1,5 +1,3 @@
-import "server-only";
-
 type AnalyticsCacheEntry<T> = {
   value: T;
   expiresAtMs: number;
