@@ -34,7 +34,7 @@ export function normalizeOrderStatus(status?: string | null) {
     case "ready_for_pickup":
       return ORDER_STATUSES.READY;
     case "out_for_delivery":
-      return "out_for_delivery";
+      return ORDER_STATUSES.OUT_FOR_DELIVERY;
     case "fulfilled":
     case "completed":
       return ORDER_STATUSES.COMPLETED;
@@ -128,13 +128,13 @@ export function getCustomerStatusDisplay({
   }
 
   if (
-    normalizedFulfillmentStatus === "out_for_delivery" ||
-    normalizedStatus === "out_for_delivery" ||
+    normalizedFulfillmentStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
+    normalizedStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
     (normalizedStatus === ORDER_STATUSES.READY &&
       normalizedFulfillment === "delivery")
   ) {
     return {
-      key: "out_for_delivery",
+      key: ORDER_STATUSES.OUT_FOR_DELIVERY,
       label: "Out for delivery",
       tone: "info",
       hint: "On the way",

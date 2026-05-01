@@ -145,21 +145,23 @@ export function buildOrderTimeline(order: OrderRecord): TimelineStep[] {
   const preparingReached =
     normalizedStatus === ORDER_STATUSES.ACCEPTED ||
     normalizedStatus === ORDER_STATUSES.READY ||
+    normalizedStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
     normalizedStatus === ORDER_STATUSES.COMPLETED ||
     normalizedFulfillmentStatus === ORDER_STATUSES.ACCEPTED ||
     normalizedFulfillmentStatus === ORDER_STATUSES.READY ||
-    normalizedFulfillmentStatus === ORDER_STATUSES.COMPLETED ||
-    normalizedFulfillmentStatus === "out_for_delivery";
+    normalizedFulfillmentStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
+    normalizedFulfillmentStatus === ORDER_STATUSES.COMPLETED;
   if (preparingReached) {
     steps[2].completed = true;
   }
 
   const readyReached =
     normalizedStatus === ORDER_STATUSES.READY ||
+    normalizedStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
     normalizedStatus === ORDER_STATUSES.COMPLETED ||
     normalizedFulfillmentStatus === ORDER_STATUSES.READY ||
-    normalizedFulfillmentStatus === ORDER_STATUSES.COMPLETED ||
-    normalizedFulfillmentStatus === "out_for_delivery";
+    normalizedFulfillmentStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
+    normalizedFulfillmentStatus === ORDER_STATUSES.COMPLETED;
   if (readyReached) {
     steps[3].completed = true;
   }
@@ -178,7 +180,8 @@ export function buildOrderTimeline(order: OrderRecord): TimelineStep[] {
   if (
     normalizedStatus === ORDER_STATUSES.READY ||
     normalizedFulfillmentStatus === ORDER_STATUSES.READY ||
-    normalizedFulfillmentStatus === "out_for_delivery"
+    normalizedStatus === ORDER_STATUSES.OUT_FOR_DELIVERY ||
+    normalizedFulfillmentStatus === ORDER_STATUSES.OUT_FOR_DELIVERY
   ) {
     steps[3].current = true;
     steps[3].timestamp = updatedAt;
