@@ -24,6 +24,13 @@ import {
   type NotificationEventKey,
 } from "@/lib/notifications/events";
 import {
+  getFirstMissedNotificationCandidate,
+  hasNotificationAttention,
+  hasNotificationFailure,
+  matchesNotificationHealthFilter,
+  summarizeNotificationHealth,
+} from "@/lib/notifications/ops";
+import {
   ADMIN_ORDER_STATUSES,
   ADMIN_STATUS_LABELS,
   getAdminPrimaryActionLabel,
@@ -80,6 +87,18 @@ type MutationPayload = {
   refundStatus?: OrderRefundStatus;
   refundNote?: string;
 };
+
+type NotificationHealthFilter = "all" | "needs_attention" | "failed" | "missed";
+
+const NOTIFICATION_FILTER_OPTIONS: Array<{
+  value: NotificationHealthFilter;
+  label: string;
+}> = [
+  { value: "all", label: "All notifications" },
+  { value: "needs_attention", label: "Needs attention" },
+  { value: "failed", label: "Failed sends" },
+  { value: "missed", label: "Missed sends" },
+];
 
 function formatMoney(value?: number) {
   return `$${(value ?? 0).toFixed(2)}`;
@@ -202,6 +221,8 @@ export default function AdminOrdersClient() {
   const [lastPollAt, setLastPollAt] = useState<Date | null>(null);
   const [pollStale, setPollStale] = useState(false);
   const [search, setSearch] = useState("");
+  const [notificationFilter, setNotificationFilter] =
+    useState<NotificationHealthFilter>("all");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<OrderRecord | null>(null);
   const [cancelReason, setCancelReason] = useState("");
@@ -512,9 +533,17 @@ export default function AdminOrdersClient() {
 
   const filteredOrders = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return orders;
-
     return orders.filter((order) => {
+      if (
+        !matchesNotificationHealthFilter(
+          order,
+          notificationFilter
+        )
+      ) {
+        return false;
+      }
+
+      if (!term) return true;
       const customer = getCustomerDisplay(order);
       return (
         order.id.toLowerCase().includes(term) ||
@@ -523,7 +552,12 @@ export default function AdminOrdersClient() {
         customer.email.toLowerCase().includes(term)
       );
     });
-  }, [orders, search]);
+  }, [notificationFilter, orders, search]);
+
+  const notificationSummary = useMemo(() => {
+    const summary = summarizeNotificationHealth(orders);
+    return summary;
+  }, [orders]);
 
   const activeMobileOrder = useMemo(() => {
     if (!expandedOrderId) return null;
@@ -611,6 +645,18 @@ export default function AdminOrdersClient() {
     [fetchOrders, user]
   );
 
+  const handleResendFirstMissed = useCallback(
+    async (order: OrderRecord) => {
+      const missedEventKey = getFirstMissedNotificationCandidate(order);
+      if (!missedEventKey) {
+        toast.error("No missed notification candidate for this order.");
+        return;
+      }
+      await handleResendNotification(order.id, missedEventKey);
+    },
+    [handleResendNotification]
+  );
+
   if (loading || roleLoading) {
     return <Card className="p-6 text-sm text-zinc-600">Loading admin view...</Card>;
   }
@@ -666,6 +712,38 @@ export default function AdminOrdersClient() {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
+          <div className="flex items-center gap-1 rounded-full border border-zinc-200 p-1">
+            {NOTIFICATION_FILTER_OPTIONS.map((option) => {
+              const active = notificationFilter === option.value;
+              const count =
+                option.value === "all"
+                  ? notificationSummary.all
+                  : option.value === "needs_attention"
+                    ? notificationSummary.needsAttention
+                    : option.value === "failed"
+                      ? notificationSummary.failed
+                      : notificationSummary.missed;
+              const activeClass =
+                option.value === "failed"
+                  ? "bg-red-600 text-white"
+                  : option.value === "needs_attention" || option.value === "missed"
+                    ? "bg-amber-500 text-white"
+                    : "bg-zinc-900 text-white";
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setNotificationFilter(option.value)}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    active ? activeClass : "text-zinc-600 hover:bg-zinc-100"
+                  }`}
+                >
+                  {option.label} ({count})
+                </button>
+              );
+            })}
+          </div>
           <Button variant="outline" onClick={enableAlerts} disabled={alertsEnabled}>
             {alertsEnabled ? "Alerts enabled" : "Enable alerts"}
           </Button>
@@ -744,6 +822,10 @@ export default function AdminOrdersClient() {
             .slice(0, 5);
           const notificationEvents = getRelevantNotificationEvents(order);
           const missedNotificationCandidates = getMissedNotificationCandidates(order);
+          const hasNotificationFailures = hasNotificationFailure(order);
+          const requiresNotificationAttention = hasNotificationAttention(order);
+          const firstMissedNotificationEvent =
+            getFirstMissedNotificationCandidate(order);
 
           return (
             <Card
@@ -786,6 +868,15 @@ export default function AdminOrdersClient() {
                     {order.refundStatus ? (
                       <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700">
                         Refund: {order.refundStatus.replace("_", " ")}
+                      </span>
+                    ) : null}
+                    {hasNotificationFailures ? (
+                      <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+                        Notification failed
+                      </span>
+                    ) : requiresNotificationAttention ? (
+                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                        Notification attention
                       </span>
                     ) : null}
                   </div>
@@ -905,6 +996,37 @@ export default function AdminOrdersClient() {
                   <p className="text-red-600">Cancel reason: {order.cancellationReason}</p>
                 ) : null}
                 {order.refundNote ? <p>Refund note: {order.refundNote}</p> : null}
+                {firstMissedNotificationEvent ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
+                    <p className="text-xs font-semibold uppercase tracking-wide">
+                      Recovery suggested
+                    </p>
+                    <p className="text-sm">
+                      Missed{" "}
+                      {getNotificationEventLabel(
+                        firstMissedNotificationEvent,
+                        order.fulfillment ?? "pickup"
+                      )}
+                      . Resend to recover customer messaging.
+                    </p>
+                    <div className="mt-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void handleResendFirstMissed(order)}
+                        disabled={
+                          resendingKey ===
+                          `${order.id}:${firstMissedNotificationEvent}`
+                        }
+                      >
+                        {resendingKey ===
+                        `${order.id}:${firstMissedNotificationEvent}`
+                          ? "Resending missed..."
+                          : "Resend missed now"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               {historyEntries.length > 0 ? (
@@ -934,7 +1056,7 @@ export default function AdminOrdersClient() {
                   <p className="text-sm font-semibold text-zinc-900">
                     Notifications
                   </p>
-                  {missedNotificationCandidates.length > 0 ? (
+                  {firstMissedNotificationEvent ? (
                     <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
                       Missed candidate
                     </span>
