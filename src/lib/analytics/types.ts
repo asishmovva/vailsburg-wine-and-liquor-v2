@@ -76,4 +76,11 @@ export type AdminAnalyticsResponse = {
     topProducts: string;
     aggregation: string;
   };
+  meta: {
+    generatedAt: string;
+    servedFromCache: boolean;
+    cacheSource: "live" | "memory";
+    cacheKey: string;
+    cacheExpiresAt: string | null;
+  };
 };

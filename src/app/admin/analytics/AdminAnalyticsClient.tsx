@@ -589,14 +589,33 @@ export default function AdminAnalyticsClient() {
               Showing {data.range.label} ({data.range.start} to {data.range.end})
               {" "}in {data.range.timeZone}.
             </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void loadAnalytics()}
-              className="w-full sm:w-auto"
-            >
-              Refresh
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] ${
+                  data.meta.servedFromCache
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-emerald-100 text-emerald-800"
+                }`}
+              >
+                {data.meta.servedFromCache ? "Cached snapshot" : "Live recompute"}
+              </span>
+              <p className="text-[11px] text-zinc-500">
+                Generated {new Date(data.meta.generatedAt).toLocaleTimeString()}
+                {data.meta.cacheExpiresAt
+                  ? ` · cache expires ${new Date(
+                      data.meta.cacheExpiresAt
+                    ).toLocaleTimeString()}`
+                  : ""}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadAnalytics()}
+                className="w-full sm:w-auto"
+              >
+                Refresh
+              </Button>
+            </div>
           </div>
         ) : null}
       </Card>
