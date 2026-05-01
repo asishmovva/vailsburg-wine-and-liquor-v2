@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetRateLimitBucketsForTests } from "@/lib/server/rateLimit";
 
 const verifyIdTokenMock = vi.fn();
 const adminAuthMock = vi.fn();
@@ -81,6 +82,7 @@ function makeRequest(body: unknown) {
 describe("POST /api/stripe/create-intent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __resetRateLimitBucketsForTests();
     adminAuthMock.mockReturnValue({
       verifyIdToken: verifyIdTokenMock,
     });
