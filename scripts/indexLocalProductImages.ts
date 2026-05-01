@@ -150,6 +150,6 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().catch(() => {
   process.exit(1);
 });
