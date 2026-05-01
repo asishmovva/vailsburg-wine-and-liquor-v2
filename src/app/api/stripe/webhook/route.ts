@@ -45,7 +45,7 @@ type OrderData = {
   reservationExpiresAt?: unknown;
 };
 
-const PAID_ORDER_STATUSES = new Set([
+const PAID_ORDER_STATUSES: ReadonlySet<string> = new Set([
   ORDER_STATUSES.NEW,
   ORDER_STATUSES.PENDING_STORE,
   ORDER_STATUSES.ACCEPTED,
