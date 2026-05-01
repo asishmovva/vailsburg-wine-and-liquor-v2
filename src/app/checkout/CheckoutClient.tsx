@@ -14,6 +14,7 @@ import {
   DELIVERY_RADIUS_MILES,
   MIN_DELIVERY_ORDER,
 } from "@/lib/checkout/guardrails";
+import { getFulfillmentAvailability } from "@/lib/checkout/storeAvailability";
 import { db } from "@/lib/firebase";
 import { calcTotals } from "@/utils/calcTotals";
 const ADDRESS_DEBOUNCE_MS = 400;
@@ -198,6 +199,10 @@ export default function CheckoutClient() {
     fulfillment === "delivery" && validation.status === "ineligible";
 
   const deliveryFee = deliveryEligible ? DELIVERY_FEE : 0;
+  const fulfillmentAvailability = useMemo(
+    () => getFulfillmentAvailability(fulfillment),
+    [fulfillment]
+  );
 
   const totals = useMemo(
     () => calcTotals({ items, deliveryFee, tip: tipAmount }),
@@ -211,6 +216,7 @@ export default function CheckoutClient() {
     items.length > 0 &&
     !loading &&
     ageConfirmed &&
+    fulfillmentAvailability.isOpen &&
     (fulfillment === "pickup" ||
       (deliveryEligible && meetsMinOrder && Boolean(selectedAddress || coords)));
 
@@ -590,6 +596,7 @@ export default function CheckoutClient() {
         clientSecret?: string;
         orderId?: string;
         error?: string;
+        code?: string;
         summary?: {
           subtotal: number;
           taxableSubtotal: number;
@@ -613,6 +620,9 @@ export default function CheckoutClient() {
       };
 
       if (!response.ok || !data.clientSecret || !data.orderId) {
+        if (data.code === "checkout_attempt_expired") {
+          setCheckoutAttemptKey(createCheckoutAttemptKey());
+        }
         throw new Error(data.error || "Unable to start payment.");
       }
 
@@ -661,6 +671,11 @@ export default function CheckoutClient() {
           <p className="text-sm text-zinc-600">
             Choose pickup or delivery and confirm your details.
           </p>
+          {!fulfillmentAvailability.isOpen ? (
+            <p className="text-sm text-amber-700">
+              {fulfillmentAvailability.message}
+            </p>
+          ) : null}
         </div>
 
         <Card className="space-y-4">
