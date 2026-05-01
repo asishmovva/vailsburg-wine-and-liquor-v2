@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import type { ImageReviewDecision, ReviewApprovedRecord } from "@/lib/image-review/types";
+import type { ImageReviewDecision } from "@/lib/image-review/types";
 import { writeReviewedMatches } from "@/lib/image-review/server";
 import { adminRateLimit } from "@/lib/server/adminRateLimit";
 import { requireAdmin } from "@/lib/server/requireAdmin";
@@ -12,7 +12,8 @@ type ExportPayload = {
 };
 
 export async function POST(req: NextRequest) {
-  const { uid, error } = await requireAdmin(req);
+  const admin = await requireAdmin(req);
+  const { uid, email, error } = admin;
   if (error) return error;
   const limited = adminRateLimit("mutate", uid, req);
   if (limited) return limited;
@@ -20,24 +21,21 @@ export async function POST(req: NextRequest) {
   const payload = (await req.json()) as ExportPayload;
   const decisions = payload.decisions ?? [];
 
-  const approved: ReviewApprovedRecord[] = decisions
-    .filter(
-      (decision): decision is Extract<ImageReviewDecision, { productId: string }> =>
-        decision.action !== "reject" && Boolean(decision.productId)
-    )
-    .map((decision) => ({
-      productId: decision.productId,
-      imagePath: decision.sourceFilePath,
-      confidence: decision.confidence,
-      source: "manual_review",
-    }));
-
-  const exportPath = writeReviewedMatches(approved);
+  const exportResult = writeReviewedMatches({
+    decisions,
+    reviewerUid: uid,
+    reviewerEmail: email,
+  });
 
   return NextResponse.json({
-    exportPath,
-    approvedCount: approved.length,
+    exportPath: exportResult.exportPath,
+    decisionsPath: exportResult.decisionsPath,
+    approvedCount: exportResult.approvedCount,
     rejectedCount: decisions.filter((decision) => decision.action === "reject").length,
     totalDecisions: decisions.length,
+    totalDecisionRecords: exportResult.totalDecisionRecords,
+    appliedDecisionCount: exportResult.appliedDecisionCount,
+    skippedOutsideScopeCount: exportResult.skippedOutsideScopeCount,
+    reviewProgress: exportResult.reviewProgress,
   });
 }

@@ -19,6 +19,7 @@ export type ImageReviewItem = {
   proposedProductName: string | null;
   proposedSize?: string;
   proposedPack?: string;
+  existingDecision: PersistedImageReviewDecision | null;
   topCandidates: ImageReviewCandidate[];
 };
 
@@ -37,6 +38,7 @@ export type ImageReviewListResponse = {
     minScore: number | null;
     maxScore: number | null;
   };
+  reviewProgress: ImageReviewProgress;
 };
 
 export type ImageReviewDecision =
@@ -65,4 +67,18 @@ export type ReviewApprovedRecord = {
   imagePath: string;
   confidence: number;
   source: "manual_review";
+};
+
+export type PersistedImageReviewDecision = ImageReviewDecision & {
+  reviewedAt: string;
+  reviewerUid: string;
+  reviewerEmail: string | null;
+};
+
+export type ImageReviewProgress = {
+  totalNeedsReview: number;
+  reviewedCount: number;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
 };

@@ -5,10 +5,19 @@ import path from "path";
 import sharp from "sharp";
 import { adminDb } from "@/lib/firebaseAdmin";
 import type {
+  ImageReviewDecision,
   ImageReviewCandidate,
   ImageReviewItem,
+  PersistedImageReviewDecision,
   ReviewApprovedRecord,
 } from "@/lib/image-review/types";
+import {
+  buildReviewApprovedRecords,
+  loadPersistedReviewDecisions,
+  mergePersistedImageReviewDecisions,
+  summarizeImageReviewProgress,
+  writePersistedReviewDecisions,
+} from "@/lib/image-review/reviewDecisions";
 
 type RawReviewCandidate = {
   productId: string;
@@ -128,6 +137,10 @@ export function readNeedsReviewRecords() {
   return readJsonFile<RawReviewRecord[]>(NEEDS_REVIEW_PATH);
 }
 
+function buildAllowedSourcePathSet(records: RawReviewRecord[]) {
+  return new Set(records.map((record) => record.sourceFilePath));
+}
+
 export async function buildReviewPageData({
   page,
   pageSize,
@@ -144,6 +157,10 @@ export async function buildReviewPageData({
   maxScore: number | null;
 }) {
   const allRecords = readNeedsReviewRecords();
+  const persisted = loadPersistedReviewDecisions();
+  const decisionsByPath = new Map<string, PersistedImageReviewDecision>(
+    Object.entries(persisted.decisions)
+  );
   const categories = Array.from(
     new Set(
       allRecords
@@ -194,6 +211,7 @@ export async function buildReviewPageData({
   ]);
 
   const items: ImageReviewItem[] = pageItems.map((record, index) => {
+    const existingDecision = decisionsByPath.get(record.sourceFilePath) ?? null;
     const topCandidates: ImageReviewCandidate[] = record.topCandidates.map((candidate) => {
       const meta = productMeta.get(candidate.productId);
       return {
@@ -220,8 +238,14 @@ export async function buildReviewPageData({
       proposedProductName: proposed?.productName ?? record.chosenProductName,
       proposedSize: proposed?.size,
       proposedPack: proposed?.pack,
+      existingDecision,
       topCandidates,
     };
+  });
+
+  const progress = summarizeImageReviewProgress({
+    needsReviewSourcePaths: allRecords.map((record) => record.sourceFilePath),
+    decisions: Object.values(persisted.decisions),
   });
 
   return {
@@ -239,11 +263,53 @@ export async function buildReviewPageData({
       minScore,
       maxScore,
     },
+    reviewProgress: progress,
   };
 }
 
-export function writeReviewedMatches(approved: ReviewApprovedRecord[]) {
+export function writeReviewedMatches(input: {
+  decisions: ImageReviewDecision[];
+  reviewerUid: string;
+  reviewerEmail: string | null;
+}) {
+  const needsReviewRecords = readNeedsReviewRecords();
+  const allowedSourcePaths = buildAllowedSourcePathSet(needsReviewRecords);
+  const now = new Date().toISOString();
+  const existing = loadPersistedReviewDecisions();
+  const existingList = Object.values(existing.decisions);
+  const mergeResult = mergePersistedImageReviewDecisions({
+    existing: existingList,
+    incoming: input.decisions,
+    reviewedAt: now,
+    reviewerUid: input.reviewerUid,
+    reviewerEmail: input.reviewerEmail,
+    allowedSourcePaths,
+  });
+  const mergedDecisions: Record<string, PersistedImageReviewDecision> =
+    Object.fromEntries(
+      mergeResult.merged.map((decision) => [decision.sourceFilePath, decision])
+    );
+
+  const decisionsPath = writePersistedReviewDecisions(mergedDecisions);
+  const approved: ReviewApprovedRecord[] = buildReviewApprovedRecords({
+    decisions: mergeResult.merged,
+    allowedSourcePaths,
+  });
+
   ensureArtifactsDir();
   fs.writeFileSync(REVIEW_APPROVED_PATH, `${JSON.stringify(approved, null, 2)}\n`, "utf8");
-  return REVIEW_APPROVED_PATH;
+  const progress = summarizeImageReviewProgress({
+    needsReviewSourcePaths: needsReviewRecords.map((record) => record.sourceFilePath),
+    decisions: mergeResult.merged,
+  });
+
+  return {
+    exportPath: REVIEW_APPROVED_PATH,
+    decisionsPath,
+    approvedCount: approved.length,
+    totalDecisionRecords: Object.keys(mergedDecisions).length,
+    appliedDecisionCount: mergeResult.appliedCount,
+    skippedOutsideScopeCount: mergeResult.skippedOutsideScopeCount,
+    reviewProgress: progress,
+  };
 }

@@ -178,6 +178,15 @@ pnpm images:match -- --input=artifacts/image-candidates.json --limit=50
 artifacts/approved_matches.json
 ```
 
+Or use the admin Image Review queue export, which now writes:
+
+```text
+artifacts/review_approved.json
+artifacts/review_decisions.json
+```
+
+`review_decisions.json` is a persistent decision ledger so reviews can be completed in batches across multiple sessions without losing previous work.
+
 Recommended rollout:
 
 - start with `images_import/beers`
@@ -188,9 +197,9 @@ Recommended rollout:
 5. Attach only approved matches:
 
 ```bash
-pnpm images:attach:dry -- --input=artifacts/approved_matches.json --limit=20
-pnpm images:attach -- --input=artifacts/approved_matches.json
-pnpm images:attach -- --input=artifacts/approved_matches.json --overwrite
+pnpm images:attach:dry -- --input=artifacts/review_approved.json --limit=20
+pnpm images:attach -- --input=artifacts/review_approved.json
+pnpm images:attach -- --input=artifacts/review_approved.json --overwrite
 ```
 
 Attach script requirements:
@@ -202,6 +211,7 @@ Attach script requirements:
 - attach runs write:
   - `artifacts/attach-summary.json`
   - `artifacts/attach-results.json`
+  - `artifacts/script-runs/attachApprovedImages/<runId>.json`
 
 Matching outputs:
 
@@ -209,6 +219,12 @@ Matching outputs:
 - `artifacts/matched_auto.json`
 - `artifacts/needs_review.json`
 - `artifacts/unmatched.json`
+
+Image script run auditability:
+
+- each image script run now writes a machine-readable run summary under:
+  - `artifacts/script-runs/<script-name>/<runId>.json`
+- summaries include: `runId`, start/end timestamps, duration, args, status, structured counters, output artifact paths, and structured error payloads (for failed runs)
 
 Storefront rollout behavior:
 
