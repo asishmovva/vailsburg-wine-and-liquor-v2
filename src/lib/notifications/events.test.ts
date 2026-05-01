@@ -5,6 +5,11 @@ import {
   getNotificationEventLabel,
   hasNotificationBeenSent,
 } from "@/lib/notifications/events";
+import {
+  getFirstMissedNotificationCandidate,
+  hasNotificationAttention,
+  hasNotificationFailure,
+} from "@/lib/notifications/ops";
 
 describe("notification event helpers", () => {
   it("supports dedupe checks for nested and legacy notification markers", () => {
@@ -87,5 +92,59 @@ describe("notification event helpers", () => {
     expect(
       getNotificationEventLabel("ADMIN_NEW_ORDER_ALERT", "delivery")
     ).toBe("Admin delivery alert");
+  });
+
+  it("detects notification failure and attention states for ops views", () => {
+    expect(
+      hasNotificationFailure({
+        notifications: {
+          readyForPickup: { lastStatus: "failed" },
+        },
+      })
+    ).toBe(true);
+    expect(
+      hasNotificationFailure({
+        notifications: {
+          orderReceived: { lastStatus: "sent" },
+        },
+      })
+    ).toBe(false);
+
+    expect(
+      hasNotificationAttention({
+        status: "READY",
+        fulfillment: "pickup",
+        notifications: {},
+      })
+    ).toBe(true);
+    expect(
+      hasNotificationAttention({
+        status: "READY",
+        fulfillment: "pickup",
+        notifications: {
+          readyForPickup: { sentAt: "2026-05-01T12:00:00.000Z" },
+        },
+      })
+    ).toBe(false);
+  });
+
+  it("returns the first resendable missed candidate for recovery actions", () => {
+    expect(
+      getFirstMissedNotificationCandidate({
+        status: "OUT_FOR_DELIVERY",
+        fulfillment: "delivery",
+        notifications: {},
+      })
+    ).toBe("OUT_FOR_DELIVERY");
+
+    expect(
+      getFirstMissedNotificationCandidate({
+        status: "COMPLETED",
+        fulfillment: "pickup",
+        notifications: {
+          completed: { sentAt: "2026-05-01T12:00:00.000Z" },
+        },
+      })
+    ).toBeNull();
   });
 });
