@@ -1,10 +1,12 @@
 import fs from "fs";
 import path from "path";
 import {
+  beginScriptRun,
   ensureArtifactsDir,
   parseCommonArgs,
   printSummary,
   resolveImageImportBaseDir,
+  writeScriptRunSummary,
   writeArtifactFile,
 } from "./lib/imageImport";
 import {
@@ -55,65 +57,99 @@ function getTopLevelCategory(baseDir: string, filePath: string) {
 
 async function main() {
   const { dryRun, limit, folder } = parseCommonArgs();
+  const runContext = beginScriptRun("scripts/indexLocalProductImages.ts", {
+    dryRun,
+    limit: limit ?? null,
+    folder: folder ?? null,
+  });
   const baseDir = resolveImageImportBaseDir(folder);
 
-  if (!fs.existsSync(baseDir)) {
-    throw new Error(`Image import folder not found: ${baseDir}`);
-  }
+  let artifactPath = "";
 
-  ensureArtifactsDir();
-
-  const files = walkFiles(baseDir);
-  const targetFiles =
-    typeof limit === "number" ? files.slice(0, limit) : files;
-
-  const indexed: IndexedImageCandidate[] = [];
-  let processed = 0;
-  let errors = 0;
-  let skippedUnsupported = 0;
-
-  for (const filePath of targetFiles) {
-    processed += 1;
-    try {
-      const sourceFileName = path.basename(filePath);
-      const sourceCategory = getTopLevelCategory(baseDir, filePath);
-      if (!isSupportedImageMatchCategory(sourceCategory)) {
-        skippedUnsupported += 1;
-        continue;
-      }
-
-      indexed.push(
-        indexImageCandidateFromPath({
-          sourceFilePath: path
-            .relative(process.cwd(), filePath)
-            .split(path.sep)
-            .join("/"),
-          sourceFileName,
-          sourceCategory,
-        })
-      );
-    } catch (error) {
-      errors += 1;
-      console.error("Failed to index image:", {
-        filePath,
-        error: (error as Error).message,
-      });
+  try {
+    if (!fs.existsSync(baseDir)) {
+      throw new Error(`Image import folder not found: ${baseDir}`);
     }
+
+    ensureArtifactsDir();
+
+    const files = walkFiles(baseDir);
+    const targetFiles =
+      typeof limit === "number" ? files.slice(0, limit) : files;
+
+    const indexed: IndexedImageCandidate[] = [];
+    let processed = 0;
+    let errors = 0;
+    let skippedUnsupported = 0;
+
+    for (const filePath of targetFiles) {
+      processed += 1;
+      try {
+        const sourceFileName = path.basename(filePath);
+        const sourceCategory = getTopLevelCategory(baseDir, filePath);
+        if (!isSupportedImageMatchCategory(sourceCategory)) {
+          skippedUnsupported += 1;
+          continue;
+        }
+
+        indexed.push(
+          indexImageCandidateFromPath({
+            sourceFilePath: path
+              .relative(process.cwd(), filePath)
+              .split(path.sep)
+              .join("/"),
+            sourceFileName,
+            sourceCategory,
+          })
+        );
+      } catch (error) {
+        errors += 1;
+        console.error("Failed to index image:", {
+          filePath,
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    artifactPath = writeArtifactFile("image-candidates.json", indexed);
+
+    const summary = {
+      processed,
+      indexed: indexed.length,
+      skipped_unsupported: skippedUnsupported,
+      errors,
+      dryRun,
+      artifactPath,
+    };
+    const runSummaryPath = writeScriptRunSummary(runContext, {
+      status: "success",
+      summary,
+      artifacts: [{ label: "image_candidates", path: artifactPath, records: indexed.length }],
+    });
+    printSummary("Local image indexing summary", {
+      ...summary,
+      runSummaryPath,
+    });
+  } catch (error) {
+    const runSummaryPath = writeScriptRunSummary(runContext, {
+      status: "failure",
+      summary: {
+        dryRun,
+        limit: limit ?? null,
+        folder: folder ?? null,
+        artifactPath: artifactPath || null,
+      },
+      artifacts: artifactPath
+        ? [{ label: "image_candidates", path: artifactPath }]
+        : [],
+      error,
+    });
+    console.error("Image indexing failed:", error);
+    console.error("Run summary written to:", runSummaryPath);
+    throw error;
   }
-
-  const artifactPath = writeArtifactFile("image-candidates.json", indexed);
-
-  printSummary("Local image indexing summary", {
-    processed,
-    indexed: indexed.length,
-    skipped_unsupported: skippedUnsupported,
-    errors,
-    dryRun,
-    artifactPath,
-  });
 }
 
-main().catch((error) => {
-  console.error("Image indexing failed:", error);
+main().catch(() => {
   process.exit(1);
 });

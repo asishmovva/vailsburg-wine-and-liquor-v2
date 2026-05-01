@@ -10,6 +10,7 @@ import type {
   ImageReviewDecision,
   ImageReviewItem,
   ImageReviewListResponse,
+  PersistedImageReviewDecision,
 } from "@/lib/image-review/types";
 
 const PAGE_SIZE = 20;
@@ -37,6 +38,26 @@ function buildQuery(params: {
   return searchParams.toString();
 }
 
+function toClientDecision(
+  persisted: PersistedImageReviewDecision
+): ImageReviewDecision {
+  if (persisted.action === "reject") {
+    return {
+      sourceFilePath: persisted.sourceFilePath,
+      sourceFileName: persisted.sourceFileName,
+      action: "reject",
+    };
+  }
+
+  return {
+    sourceFilePath: persisted.sourceFilePath,
+    sourceFileName: persisted.sourceFileName,
+    action: persisted.action,
+    productId: persisted.productId,
+    confidence: persisted.confidence,
+  };
+}
+
 export default function AdminImageReviewClient() {
   const [items, setItems] = useState<ImageReviewItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -51,6 +72,13 @@ export default function AdminImageReviewClient() {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [decisions, setDecisions] = useState<DecisionMap>({});
+  const [reviewProgress, setReviewProgress] = useState({
+    totalNeedsReview: 0,
+    reviewedCount: 0,
+    pendingCount: 0,
+    approvedCount: 0,
+    rejectedCount: 0,
+  });
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -69,6 +97,18 @@ export default function AdminImageReviewClient() {
       setCategories(payload.filters.categories);
       setTotalPages(payload.pagination.totalPages);
       setTotalItems(payload.pagination.totalItems);
+      setReviewProgress(payload.reviewProgress);
+      setDecisions((current) => {
+        const merged = { ...current };
+        for (const item of payload.items) {
+          if (!item.existingDecision) continue;
+          const key = decisionKey(item);
+          if (!merged[key]) {
+            merged[key] = toClientDecision(item.existingDecision);
+          }
+        }
+        return merged;
+      });
     } catch (fetchError) {
       setError((fetchError as Error).message);
       setItems([]);
@@ -128,11 +168,28 @@ export default function AdminImageReviewClient() {
 
       const payload = (await response.json()) as {
         exportPath: string;
+        decisionsPath: string;
         approvedCount: number;
         rejectedCount: number;
+        totalDecisionRecords: number;
+        appliedDecisionCount: number;
+        skippedOutsideScopeCount: number;
+        reviewProgress: {
+          totalNeedsReview: number;
+          reviewedCount: number;
+          pendingCount: number;
+          approvedCount: number;
+          rejectedCount: number;
+        };
       };
+      setReviewProgress(payload.reviewProgress);
+      if (payload.skippedOutsideScopeCount > 0) {
+        toast.error(
+          `${payload.skippedOutsideScopeCount} decision(s) were skipped because they are not in the current needs-review backlog.`
+        );
+      }
       toast.success(
-        `Exported ${payload.approvedCount} approved matches (${payload.rejectedCount} rejected) to ${payload.exportPath}.`
+        `Exported ${payload.approvedCount} approved matches (${payload.rejectedCount} rejected). Applied ${payload.appliedDecisionCount} decision updates. Decisions saved to ${payload.decisionsPath}.`
       );
     } catch (exportError) {
       toast.error((exportError as Error).message);
@@ -152,7 +209,8 @@ export default function AdminImageReviewClient() {
         </div>
         <p className="text-sm text-zinc-600">
           Review `needs_review.json` items, choose safe matches, and export
-          `review_approved.json` for the existing attach script.
+          `review_approved.json` for the existing attach script. Decisions persist
+          in `review_decisions.json` so batches can be completed safely over multiple sessions.
         </p>
       </div>
 
@@ -226,6 +284,10 @@ export default function AdminImageReviewClient() {
             <span>Reviewed this session: {reviewedCount}</span>
             <span>Approved: {approvedCount}</span>
             <span>Rejected: {rejectCount}</span>
+            <span>Backlog pending: {reviewProgress.pendingCount}</span>
+            <span>
+              Overall progress: {reviewProgress.reviewedCount}/{reviewProgress.totalNeedsReview}
+            </span>
           </div>
 
           <Button onClick={exportApprovedMatches} disabled={exporting}>

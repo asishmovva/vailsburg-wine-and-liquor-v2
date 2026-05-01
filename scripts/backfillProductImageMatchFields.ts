@@ -2,8 +2,10 @@ import { FieldPath, FieldValue } from "firebase-admin/firestore";
 import { loadEnvFromFile } from "./lib/env";
 import { getFirestoreDb } from "./lib/firebaseAdmin";
 import {
+  beginScriptRun,
   parseCommonArgs,
   printSummary,
+  writeScriptRunSummary,
   writeArtifactFile,
 } from "./lib/imageImport";
 import { buildNormalizedProductImageFields } from "./lib/imageMatchingNormalize";
@@ -23,8 +25,16 @@ type ProductDoc = {
 async function main() {
   loadEnvFromFile(".env.local");
   const { dryRun, limit } = parseCommonArgs();
+  const runContext = beginScriptRun(
+    "scripts/backfillProductImageMatchFields.ts",
+    {
+      dryRun,
+      limit: limit ?? null,
+    }
+  );
   const db = getFirestoreDb();
 
+  let summaryPath = "";
   let processed = 0;
   let updated = 0;
   let skipped = 0;
@@ -116,11 +126,41 @@ async function main() {
     dryRun,
   };
 
-  writeArtifactFile("backfillProductImageMatchFields-summary.json", summary);
+  summaryPath = writeArtifactFile(
+    "backfillProductImageMatchFields-summary.json",
+    summary
+  );
+  const runSummaryPath = writeScriptRunSummary(runContext, {
+    status: "success",
+    summary: {
+      ...summary,
+      summaryPath,
+    },
+    artifacts: [{ label: "backfill_summary", path: summaryPath, records: 1 }],
+  });
   printSummary("Image match field backfill summary", summary);
+  console.log("Run summary:", runSummaryPath);
 }
 
 main().catch((error) => {
+  const { dryRun, limit } = parseCommonArgs();
+  const runContext = beginScriptRun(
+    "scripts/backfillProductImageMatchFields.ts",
+    {
+      dryRun,
+      limit: limit ?? null,
+    }
+  );
+  const runSummaryPath = writeScriptRunSummary(runContext, {
+    status: "failure",
+    summary: {
+      dryRun,
+      limit: limit ?? null,
+    },
+    artifacts: [],
+    error,
+  });
   console.error("Backfill failed:", error);
+  console.error("Run summary written to:", runSummaryPath);
   process.exit(1);
 });

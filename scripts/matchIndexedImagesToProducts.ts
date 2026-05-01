@@ -6,9 +6,11 @@ import {
 import { loadEnvFromFile } from "./lib/env";
 import { getFirestoreDb } from "./lib/firebaseAdmin";
 import {
+  beginScriptRun,
   parseCommonArgs,
   printSummary,
   readJsonFile,
+  writeScriptRunSummary,
   writeArtifactFile,
 } from "./lib/imageImport";
 import {
@@ -107,69 +109,111 @@ async function loadSellableProducts(limit?: number) {
 async function main() {
   loadEnvFromFile(".env.local");
   const { dryRun, limit, input } = parseCommonArgs();
-
-  const candidates = readJsonFile<IndexedImageCandidate[]>(
-    input ?? "artifacts/image-candidates.json"
-  );
-  const targetCandidates =
-    typeof limit === "number" ? candidates.slice(0, limit) : candidates;
-  const products = await loadSellableProducts();
-
-  const productsByCategory = new Map<string, ProductImageMatchTarget[]>();
-  for (const product of products) {
-    const list = productsByCategory.get(product.categoryNormalized) ?? [];
-    list.push(product);
-    productsByCategory.set(product.categoryNormalized, list);
-  }
-
-  const matchedAuto: MatchOutputRecord[] = [];
-  const needsReview: MatchOutputRecord[] = [];
-  const unmatched: MatchOutputRecord[] = [];
-
-  for (const image of targetCandidates) {
-    const candidateProducts = productsByCategory.get(image.categoryNormalized) ?? [];
-    const scored = candidateProducts.map((product) =>
-      scoreImageCandidate(image, product)
-    );
-    const result = classifyScoredMatches(scored);
-
-    const record: MatchOutputRecord = {
-      ...image,
-      decision: result.decision,
-      chosenProductId: result.best?.productId ?? null,
-      chosenProductName: result.best?.productName ?? null,
-      score: result.best?.score ?? 0,
-      margin: result.margin,
-      whyMatched: result.best?.reasons ?? ["no viable candidates"],
-      topCandidates: result.topCandidates,
-    };
-
-    if (result.decision === "auto-match") {
-      matchedAuto.push(record);
-    } else if (result.decision === "needs-review") {
-      needsReview.push(record);
-    } else {
-      unmatched.push(record);
-    }
-  }
-
-  const matchedAutoPath = writeArtifactFile("matched_auto.json", matchedAuto);
-  const needsReviewPath = writeArtifactFile("needs_review.json", needsReview);
-  const unmatchedPath = writeArtifactFile("unmatched.json", unmatched);
-
-  printSummary("Image matching summary", {
-    processed: targetCandidates.length,
-    matched_auto: matchedAuto.length,
-    needs_review: needsReview.length,
-    unmatched: unmatched.length,
+  const runContext = beginScriptRun("scripts/matchIndexedImagesToProducts.ts", {
     dryRun,
-    matchedAutoPath,
-    needsReviewPath,
-    unmatchedPath,
+    limit: limit ?? null,
+    input: input ?? "artifacts/image-candidates.json",
   });
+
+  let matchedAutoPath = "";
+  let needsReviewPath = "";
+  let unmatchedPath = "";
+
+  try {
+    const candidates = readJsonFile<IndexedImageCandidate[]>(
+      input ?? "artifacts/image-candidates.json"
+    );
+    const targetCandidates =
+      typeof limit === "number" ? candidates.slice(0, limit) : candidates;
+    const products = await loadSellableProducts();
+
+    const productsByCategory = new Map<string, ProductImageMatchTarget[]>();
+    for (const product of products) {
+      const list = productsByCategory.get(product.categoryNormalized) ?? [];
+      list.push(product);
+      productsByCategory.set(product.categoryNormalized, list);
+    }
+
+    const matchedAuto: MatchOutputRecord[] = [];
+    const needsReview: MatchOutputRecord[] = [];
+    const unmatched: MatchOutputRecord[] = [];
+
+    for (const image of targetCandidates) {
+      const candidateProducts = productsByCategory.get(image.categoryNormalized) ?? [];
+      const scored = candidateProducts.map((product) =>
+        scoreImageCandidate(image, product)
+      );
+      const result = classifyScoredMatches(scored);
+
+      const record: MatchOutputRecord = {
+        ...image,
+        decision: result.decision,
+        chosenProductId: result.best?.productId ?? null,
+        chosenProductName: result.best?.productName ?? null,
+        score: result.best?.score ?? 0,
+        margin: result.margin,
+        whyMatched: result.best?.reasons ?? ["no viable candidates"],
+        topCandidates: result.topCandidates,
+      };
+
+      if (result.decision === "auto-match") {
+        matchedAuto.push(record);
+      } else if (result.decision === "needs-review") {
+        needsReview.push(record);
+      } else {
+        unmatched.push(record);
+      }
+    }
+
+    matchedAutoPath = writeArtifactFile("matched_auto.json", matchedAuto);
+    needsReviewPath = writeArtifactFile("needs_review.json", needsReview);
+    unmatchedPath = writeArtifactFile("unmatched.json", unmatched);
+
+    const summary = {
+      processed: targetCandidates.length,
+      matched_auto: matchedAuto.length,
+      needs_review: needsReview.length,
+      unmatched: unmatched.length,
+      dryRun,
+      matchedAutoPath,
+      needsReviewPath,
+      unmatchedPath,
+    };
+    const runSummaryPath = writeScriptRunSummary(runContext, {
+      status: "success",
+      summary,
+      artifacts: [
+        { label: "matched_auto", path: matchedAutoPath, records: matchedAuto.length },
+        { label: "needs_review", path: needsReviewPath, records: needsReview.length },
+        { label: "unmatched", path: unmatchedPath, records: unmatched.length },
+      ],
+    });
+
+    printSummary("Image matching summary", {
+      ...summary,
+      runSummaryPath,
+    });
+  } catch (error) {
+    const runSummaryPath = writeScriptRunSummary(runContext, {
+      status: "failure",
+      summary: {
+        dryRun,
+        limit: limit ?? null,
+        input: input ?? "artifacts/image-candidates.json",
+      },
+      artifacts: [
+        ...(matchedAutoPath ? [{ label: "matched_auto", path: matchedAutoPath }] : []),
+        ...(needsReviewPath ? [{ label: "needs_review", path: needsReviewPath }] : []),
+        ...(unmatchedPath ? [{ label: "unmatched", path: unmatchedPath }] : []),
+      ],
+      error,
+    });
+    console.error("Image matching failed:", error);
+    console.error("Run summary written to:", runSummaryPath);
+    throw error;
+  }
 }
 
-main().catch((error) => {
-  console.error("Image matching failed:", error);
+main().catch(() => {
   process.exit(1);
 });
