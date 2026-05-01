@@ -87,6 +87,11 @@ type MutationPayload = {
   reason?: string;
   refundStatus?: OrderRefundStatus;
   refundNote?: string;
+  handoffVerification?: {
+    idChecked: boolean;
+    signatureCollected?: boolean;
+    note?: string;
+  };
 };
 
 type NotificationHealthFilter = "all" | "needs_attention" | "failed" | "missed";
@@ -304,6 +309,34 @@ function getRefundReconciliationView(
       errorInfo: reconciliation.stripeLastError ?? null,
     },
   };
+}
+
+function getHandoffVerificationBadge(
+  order: Pick<OrderRecord, "handoffVerification" | "fulfillment">
+) {
+  const verification = order.handoffVerification;
+  if (!verification?.idChecked) {
+    return {
+      label: "ID check pending",
+      className: "bg-amber-100 text-amber-700",
+    };
+  }
+
+  if (order.fulfillment === "delivery" && verification.signatureCollected) {
+    return {
+      label: "ID + signature verified",
+      className: "bg-emerald-100 text-emerald-700",
+    };
+  }
+
+  return {
+    label: "ID verified",
+    className: "bg-emerald-100 text-emerald-700",
+  };
+}
+
+function requiresAlcoholHandoffVerification(order: Pick<OrderRecord, "ageVerified" | "fulfillment">) {
+  return order.ageVerified === true || order.fulfillment === "delivery";
 }
 
 export default function AdminOrdersClient() {
@@ -605,6 +638,27 @@ export default function AdminOrdersClient() {
     [pendingAction, performMutation]
   );
 
+  const handleHandoffVerificationAction = useCallback(
+    async (
+      order: OrderRecord,
+      handoffVerification: {
+        idChecked: boolean;
+        signatureCollected?: boolean;
+        note?: string;
+      },
+      successMessage: string
+    ) => {
+      await performMutation({
+        orderId: order.id,
+        payload: {
+          handoffVerification,
+        },
+        successMessage,
+      });
+    },
+    [performMutation]
+  );
+
   const handleCancelConfirm = async () => {
     if (!cancelTarget) return;
 
@@ -666,9 +720,11 @@ export default function AdminOrdersClient() {
   const showMobileActionBar = useMemo(() => {
     if (!activeMobileOrder) return false;
     const refundActions = getRefundActions(activeMobileOrder);
+    const requiresHandoff = requiresAlcoholHandoffVerification(activeMobileOrder);
     return Boolean(
       getPrimaryAction(activeMobileOrder) ||
         canCancelOrder(activeMobileOrder) ||
+        requiresHandoff ||
         refundActions.canMarkPending ||
         refundActions.canMarkRefunded
     );
@@ -977,6 +1033,13 @@ export default function AdminOrdersClient() {
                         {refundReconciliationView.badge.title}
                       </span>
                     ) : null}
+                    {requiresAlcoholHandoffVerification(order) ? (
+                      <span
+                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getHandoffVerificationBadge(order).className}`}
+                      >
+                        {getHandoffVerificationBadge(order).label}
+                      </span>
+                    ) : null}
                     {hasNotificationFailures ? (
                       <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
                         Notification failed
@@ -1091,6 +1154,30 @@ export default function AdminOrdersClient() {
                 <p>Order notes: {order.statusNote ?? "-"}</p>
                 {order.deliveryInstructions ? (
                   <p>Delivery instructions: {order.deliveryInstructions}</p>
+                ) : null}
+                {requiresAlcoholHandoffVerification(order) ? (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-zinc-800">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Handoff verification
+                    </p>
+                    <p className="text-sm">
+                      ID check:{" "}
+                      {order.handoffVerification?.idChecked ? "verified" : "pending"}
+                    </p>
+                    {order.fulfillment === "delivery" ? (
+                      <p className="text-sm">
+                        Signature:{" "}
+                        {order.handoffVerification?.signatureCollected
+                          ? "captured"
+                          : "not captured"}
+                      </p>
+                    ) : null}
+                    {order.handoffVerification?.note ? (
+                      <p className="text-xs text-zinc-600">
+                        Note: {order.handoffVerification.note}
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 {order.notifications?.emailLastError || order.alerts?.emailLastError ? (
                   <p className="font-medium text-red-600">
@@ -1284,6 +1371,34 @@ export default function AdminOrdersClient() {
                   </Button>
                 ) : null}
 
+                {requiresAlcoholHandoffVerification(order) &&
+                !order.handoffVerification?.idChecked ? (
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      void handleHandoffVerificationAction(
+                        order,
+                        {
+                          idChecked: true,
+                          signatureCollected: order.fulfillment === "delivery",
+                          note:
+                            order.fulfillment === "delivery"
+                              ? "ID checked and signature captured at delivery."
+                              : "ID checked at pickup handoff.",
+                        },
+                        order.fulfillment === "delivery"
+                          ? "ID + signature verified"
+                          : "ID verified"
+                      )
+                    }
+                    disabled={updatingId === order.id}
+                  >
+                    {order.fulfillment === "delivery"
+                      ? "Mark ID + signature"
+                      : "Mark ID verified"}
+                  </Button>
+                ) : null}
+
                 {refundActions.canMarkPending ? (
                   <Button
                     variant="outline"
@@ -1315,13 +1430,21 @@ export default function AdminOrdersClient() {
         const primaryAction = getPrimaryAction(activeMobileOrder);
         const canCancel = canCancelOrder(activeMobileOrder);
         const refundActions = getRefundActions(activeMobileOrder);
+        const requiresHandoff = requiresAlcoholHandoffVerification(activeMobileOrder);
+        const handoffPending = !activeMobileOrder.handoffVerification?.idChecked;
         const normalizedStatus = getNormalizedStatus(activeMobileOrder);
         const pendingStatusKey = primaryAction
           ? `status:${primaryAction.nextStatus}`
           : "";
         const pendingRefundKey = "refund:refunded";
 
-        if (!primaryAction && !canCancel && !refundActions.canMarkPending && !refundActions.canMarkRefunded) {
+        if (
+          !primaryAction &&
+          !canCancel &&
+          !(requiresHandoff && handoffPending) &&
+          !refundActions.canMarkPending &&
+          !refundActions.canMarkRefunded
+        ) {
           return null;
         }
 
@@ -1359,6 +1482,34 @@ export default function AdminOrdersClient() {
                     disabled={updatingId === activeMobileOrder.id}
                   >
                     Cancel order
+                  </Button>
+                ) : null}
+
+                {requiresHandoff && handoffPending ? (
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      void handleHandoffVerificationAction(
+                        activeMobileOrder,
+                        {
+                          idChecked: true,
+                          signatureCollected:
+                            activeMobileOrder.fulfillment === "delivery",
+                          note:
+                            activeMobileOrder.fulfillment === "delivery"
+                              ? "ID checked and signature captured at delivery."
+                              : "ID checked at pickup handoff.",
+                        },
+                        activeMobileOrder.fulfillment === "delivery"
+                          ? "ID + signature verified"
+                          : "ID verified"
+                      )
+                    }
+                    disabled={updatingId === activeMobileOrder.id}
+                  >
+                    {activeMobileOrder.fulfillment === "delivery"
+                      ? "ID + sign"
+                      : "ID verified"}
                   </Button>
                 ) : null}
 

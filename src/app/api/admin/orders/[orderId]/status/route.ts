@@ -14,6 +14,7 @@ import {
   getCanonicalNextAdminStatus,
 } from "@/lib/orders/adminStatusTransitions";
 import type {
+  OrderHandoffVerification,
   OrderAdminHistoryEntry,
   OrderNotifications,
   OrderRefundReconciliation,
@@ -71,10 +72,18 @@ type OrderData = {
   refundStatus?: OrderRefundStatus | null;
   refundNote?: string | null;
   refundReconciliation?: OrderRefundReconciliation | null;
+  ageVerified?: boolean;
+  handoffVerification?: OrderHandoffVerification | null;
+  // Backward-compat read path for legacy field name.
+  alcoholHandoff?: OrderHandoffVerification | null;
   fulfillmentStatus?: string | null;
   cancellationReason?: string | null;
   stripe?: { paymentIntentId?: string | null } | null;
 };
+
+function getExistingHandoffVerification(orderData: OrderData) {
+  return orderData.handoffVerification ?? orderData.alcoholHandoff ?? null;
+}
 
 type StripePaymentIntentWithExpandedCharges = {
   id: string;
@@ -128,6 +137,13 @@ export async function POST(
   let reason: string | undefined;
   let refundStatus: OrderRefundStatus | undefined;
   let refundNote: string | undefined;
+  const updatesFromBody: {
+    handoffVerification?: {
+      idChecked: boolean;
+      signatureCollected?: boolean;
+      note?: string | null;
+    };
+  } = {};
 
   try {
     const body = (await req.json()) as {
@@ -135,11 +151,41 @@ export async function POST(
       reason?: string;
       refundStatus?: OrderRefundStatus;
       refundNote?: string;
+      handoffVerification?: {
+        idChecked?: boolean;
+        signatureCollected?: boolean;
+        note?: string;
+      };
+      alcoholHandoff?: {
+        idChecked?: boolean;
+        signatureCaptured?: boolean;
+        notes?: string;
+      };
     };
     nextStatusInput = body.status;
     reason = normalizeOptionalText(body.reason);
     refundStatus = body.refundStatus;
     refundNote = normalizeOptionalText(body.refundNote);
+    const handoffPayload = body.handoffVerification ?? body.alcoholHandoff;
+    if (handoffPayload) {
+      const signatureCollectedValue =
+        "signatureCollected" in handoffPayload
+          ? handoffPayload.signatureCollected
+          : undefined;
+      const signatureCapturedValue =
+        "signatureCaptured" in handoffPayload
+          ? handoffPayload.signatureCaptured
+          : undefined;
+      const handoffNoteValue = "note" in handoffPayload
+        ? handoffPayload.note
+        : ("notes" in handoffPayload ? handoffPayload.notes : undefined);
+      updatesFromBody.handoffVerification = {
+        idChecked: handoffPayload.idChecked === true,
+        signatureCollected:
+          signatureCollectedValue === true || signatureCapturedValue === true,
+        note: normalizeOptionalText(handoffNoteValue) ?? null,
+      };
+    }
   } catch {
     nextStatusInput = undefined;
   }
@@ -148,7 +194,7 @@ export async function POST(
     ? getCanonicalNextAdminStatus(nextStatusInput)
     : null;
 
-  if (!nextStatus && !refundStatus) {
+  if (!nextStatus && !refundStatus && !updatesFromBody.handoffVerification) {
     return NextResponse.json(
       { error: "Status or refund update required." },
       { status: 400 }
@@ -205,6 +251,26 @@ export async function POST(
         updates.fulfillmentStatus = nextStatus;
         updates.statusUpdatedAt = Timestamp.now();
 
+        const existingHandoffVerification = getExistingHandoffVerification(orderData);
+        const mergedHandoffVerification = updatesFromBody.handoffVerification
+          ? {
+              ...existingHandoffVerification,
+              ...updatesFromBody.handoffVerification,
+            }
+          : existingHandoffVerification;
+
+        if (
+          nextStatus === ADMIN_ORDER_STATUSES.COMPLETED &&
+          (orderData.ageVerified === true || orderData.fulfillment === "delivery")
+        ) {
+          if (mergedHandoffVerification?.idChecked !== true) {
+            throw new MutationError(
+              "ID verification must be marked before completing this order.",
+              400
+            );
+          }
+        }
+
         if (nextStatus === ADMIN_ORDER_STATUSES.CANCELLED) {
           updates.cancellationReason = reason ?? null;
           updates.cancelReason = reason ?? null;
@@ -220,6 +286,37 @@ export async function POST(
           from: currentStatus ?? null,
           to: nextStatus,
           reason: nextStatus === ADMIN_ORDER_STATUSES.CANCELLED ? reason ?? null : null,
+        });
+      }
+
+      if (updatesFromBody.handoffVerification) {
+        const existingHandoffVerification = getExistingHandoffVerification(orderData);
+        const mergedHandoffVerification = {
+          ...existingHandoffVerification,
+          ...updatesFromBody.handoffVerification,
+          verifiedAt: Timestamp.now(),
+          verifiedByUid: admin.uid,
+          verifiedByEmail: admin.email ?? null,
+        };
+        updates.handoffVerification = mergedHandoffVerification;
+        const fromState = existingHandoffVerification?.idChecked
+          ? existingHandoffVerification.signatureCollected
+            ? "id_and_signature_checked"
+            : "id_checked"
+          : "id_pending";
+        const toState = mergedHandoffVerification.idChecked
+          ? mergedHandoffVerification.signatureCollected
+            ? "id_and_signature_checked"
+            : "id_checked"
+          : "id_pending";
+        historyEntries.push({
+          at: Timestamp.now(),
+          actorUid: admin.uid,
+          actorEmail: admin.email,
+          action: "handoff_verified",
+          from: fromState,
+          to: toState,
+          reason: mergedHandoffVerification.note ?? null,
         });
       }
 
@@ -328,6 +425,9 @@ export async function POST(
         refundReconciliation:
           (updates.refundReconciliation as OrderRefundReconciliation | null | undefined) ??
           orderData.refundReconciliation,
+        handoffVerification:
+          (updates.handoffVerification as OrderHandoffVerification | null | undefined) ??
+          getExistingHandoffVerification(orderData),
         adminHistory: [...existingHistory, ...historyEntries],
       };
     });
