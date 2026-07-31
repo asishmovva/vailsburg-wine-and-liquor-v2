@@ -1,9 +1,24 @@
 import "server-only";
 
 import type { EmailPayload } from "@/lib/email/types";
+import { getOrderItemCustomerMessage } from "@/lib/orders/inventoryExceptions";
 import { getCustomerStatusDisplay } from "@/lib/orders/statusMapping";
+import type { OrderItem } from "@/lib/orders/types";
 
 type OrderEmailItem = {
+  lineItemId?: string;
+  fulfillmentStatus?: OrderItem["fulfillmentStatus"];
+  exceptionReason?: string | null;
+  replacement?: {
+    name?: string;
+    price?: number;
+    qty?: number;
+  } | null;
+  refund?: {
+    amount?: number;
+    status?: "pending" | "completed";
+    note?: string | null;
+  } | null;
   name: string;
   qty: number;
   price?: number;
@@ -30,6 +45,7 @@ export type OrderEmailData = {
 export type CustomerOrderEmailMilestone =
   | "orderReceived"
   | "paymentConfirmed"
+  | "orderUpdated"
   | "ready"
   | "outForDelivery"
   | "completed"
@@ -86,6 +102,17 @@ function getOrderSummaryLines(order: OrderEmailData) {
   return items.map(
     (item) => `${item.qty} x ${item.name} (${formatMoney(item.price)})`
   );
+}
+
+function getOrderUpdateLines(order: OrderEmailData) {
+  const items = order.items ?? [];
+  return items
+    .map((item) => {
+      const message = getOrderItemCustomerMessage(item);
+      if (!message) return null;
+      return `${item.name}: ${message}`;
+    })
+    .filter((line): line is string => Boolean(line));
 }
 
 export function buildNewOrderEmail(order: OrderEmailData): Pick<
@@ -198,6 +225,13 @@ export function buildCustomerOrderEmail(
           heading: `Payment confirmed #${shortId}`,
           message: "Your payment has been confirmed and your order is in progress.",
         };
+      case "orderUpdated":
+        return {
+          subject: `Update about your order - #${shortId}`,
+          heading: `Order update #${shortId}`,
+          message:
+            "We made an update to one or more items in your order. Review the latest order details below.",
+        };
       case "ready":
         return {
           subject: `Ready for pickup - #${shortId}`,
@@ -244,6 +278,7 @@ export function buildCustomerOrderEmail(
     order.fulfillment === "delivery"
       ? order.delivery?.address ?? "-"
       : "Pickup";
+  const orderUpdateLines = milestone === "orderUpdated" ? getOrderUpdateLines(order) : [];
   const instructionLines =
     order.fulfillment === "delivery"
       ? [
@@ -266,6 +301,9 @@ export function buildCustomerOrderEmail(
     `Status: ${statusDisplay.label}`,
     `Fulfillment: ${fulfillment}`,
     `Total: ${formatMoney(order.total)}`,
+    milestone === "orderUpdated" && orderUpdateLines.length > 0 ? "Updates:" : undefined,
+    ...(milestone === "orderUpdated" ? orderUpdateLines : []),
+    milestone === "orderUpdated" ? "" : undefined,
     `Items:`,
     ...itemsLines,
     order.fulfillment === "delivery" ? `Address: ${address}` : undefined,
@@ -279,6 +317,12 @@ export function buildCustomerOrderEmail(
     .join("\n");
 
   const htmlItems = itemsLines.map((line) => `<li>${line}</li>`).join("");
+  const htmlUpdates =
+    milestone === "orderUpdated" && orderUpdateLines.length > 0
+      ? `<h3>Updates</h3><ul>${orderUpdateLines
+          .map((line) => `<li>${line}</li>`)
+          .join("")}</ul>`
+      : "";
 
   const html = `
     <h2>${milestoneText.heading}</h2>
@@ -287,6 +331,7 @@ export function buildCustomerOrderEmail(
     <p><strong>Status:</strong> ${statusDisplay.label}</p>
     <p><strong>Fulfillment:</strong> ${fulfillment}</p>
     <p><strong>Total:</strong> ${formatMoney(order.total)}</p>
+    ${htmlUpdates}
     <h3>Items</h3>
     <ul>${htmlItems}</ul>
     ${order.fulfillment === "delivery" ? `<p><strong>Address:</strong> ${address}</p>` : ""}

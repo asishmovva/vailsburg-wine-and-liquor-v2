@@ -15,12 +15,40 @@ export type CustomerStatusView = {
 };
 
 export type OrderItem = {
+  lineItemId?: string;
   productId: string;
   name: string;
   price: number;
   qty: number;
   image?: string | null;
   category?: string;
+  size?: string;
+  pack?: string;
+  fulfillmentStatus?:
+    | "pending"
+    | "fulfilled"
+    | "unavailable"
+    | "replaced"
+    | "refund_pending"
+    | "refunded";
+  exceptionReason?: string | null;
+  replacement?: {
+    productId: string;
+    name: string;
+    price: number;
+    size?: string;
+    pack?: string;
+    qty: number;
+    image?: string | null;
+    category?: string;
+  } | null;
+  refund?: {
+    amount: number;
+    status: "pending" | "completed";
+    note?: string | null;
+    markedAt?: unknown;
+    markedBy?: string | null;
+  } | null;
 };
 
 export type DeliveryInfo = {
@@ -60,6 +88,7 @@ export type OrderNotificationStateRecord = {
 export type OrderNotifications = {
   orderReceived?: OrderNotificationStateRecord | null;
   paymentConfirmed?: OrderNotificationStateRecord | null;
+  orderUpdated?: OrderNotificationStateRecord | null;
   readyForPickup?: OrderNotificationStateRecord | null;
   outForDelivery?: OrderNotificationStateRecord | null;
   completed?: OrderNotificationStateRecord | null;
@@ -122,10 +151,35 @@ export type OrderAdminHistoryEntry = {
     | "cancel"
     | "refund_marked"
     | "note_added"
-    | "handoff_verified";
+    | "handoff_verified"
+    | "item_marked_unavailable"
+    | "item_replaced"
+    | "partial_refund_marked_pending"
+    | "partial_refund_marked_completed";
   from?: string | null;
   to?: string | null;
   reason?: string | null;
+  itemName?: string | null;
+  productId?: string | null;
+  lineItemId?: string | null;
+  replacementProductId?: string | null;
+  replacementName?: string | null;
+  amount?: number | null;
+  note?: string | null;
+};
+
+export type OrderInventoryException = {
+  hasException: boolean;
+  status: "open" | "resolved";
+  summary?: string | null;
+  updatedAt?: unknown;
+  updatedBy?: string | null;
+};
+
+export type OrderAdjustments = {
+  refundPendingTotal?: number;
+  refundCompletedTotal?: number;
+  replacementDifference?: number;
 };
 
 export type OrderRecord = {
@@ -172,6 +226,8 @@ export type OrderRecord = {
   refundedAt?: unknown;
   refundReconciliation?: OrderRefundReconciliation | null;
   handoffVerification?: OrderHandoffVerification | null;
+  inventoryException?: OrderInventoryException | null;
+  adjustments?: OrderAdjustments | null;
   adminHistory?: OrderAdminHistoryEntry[] | null;
   paid?: boolean;
   pos?: {

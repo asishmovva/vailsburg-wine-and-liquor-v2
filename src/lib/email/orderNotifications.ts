@@ -23,6 +23,8 @@ function getEventKey(milestone: CustomerOrderEmailMilestone) {
       return "ORDER_RECEIVED" as const;
     case "paymentConfirmed":
       return "PAYMENT_CONFIRMED" as const;
+    case "orderUpdated":
+      return "ORDER_UPDATED" as const;
     case "ready":
       return "READY_FOR_PICKUP" as const;
     case "outForDelivery":
