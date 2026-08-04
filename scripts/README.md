@@ -50,7 +50,7 @@ Sync Sypram item list into Firestore products. Cooldown enforced (30 minutes).
 
 Required env vars (in `.env.local`):
 
-- `SYPRAM_BASE_URL=https://DataServices.sypramsoftware.com`
+- `SYPRAM_BASE_URL=your_sypram_base_url`
 - `SYPRAM_USERID=...`
 - `SYPRAM_PASSWORD=...`
 - `SYPRAM_PIN=...`

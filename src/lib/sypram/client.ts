@@ -2,7 +2,6 @@ import "server-only";
 
 import type { SypramItem, SypramResponse } from "@/lib/sypram/types";
 
-const DEFAULT_BASE_URL = "https://DataServices.sypramsoftware.com";
 const ITEM_LIST_PATH = "/api/Item/GetItemList";
 
 function getEnvValue(key: string) {
@@ -11,13 +10,13 @@ function getEnvValue(key: string) {
 }
 
 function getSypramConfig() {
-  const baseUrl = getEnvValue("SYPRAM_BASE_URL") || DEFAULT_BASE_URL;
+  const baseUrl = getEnvValue("SYPRAM_BASE_URL");
   const user = getEnvValue("SYPRAM_USERID");
   const password = getEnvValue("SYPRAM_PASSWORD");
   const pin = getEnvValue("SYPRAM_PIN");
 
-  if (!user || !password || !pin) {
-    throw new Error("Missing Sypram credentials in env vars.");
+  if (!baseUrl || !user || !password || !pin) {
+    throw new Error("Missing Sypram configuration in env vars.");
   }
 
   return { baseUrl, user, password, pin };
